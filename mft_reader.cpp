@@ -18,8 +18,8 @@
 //   - Walking the full MFT and reconstructing the directory tree
 //   - Filtering output to a specific starting subfolder
 //
-// IMPORTANT: This must be run from an elevated (Administrator) command
-// prompt. Raw volume handles are only obtainable with elevated privileges.
+// IMPORTANT: This must be run from an elevated (Administrator) command prompt. 
+//            Raw volume handles are only obtainable with elevated privileges.
 //
 // Build (TDM32, C++11): see accompanying Makefile.
 
@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <string>
+#include <conio.h>   //  getch()
 
 // ---------------------------------------------------------------------
 // NTFS boot sector (BIOS Parameter Block), exactly 512 bytes on disk.
@@ -145,6 +146,7 @@ static uint32_t ComputeMftRecordSize(const NTFS_BOOT_SECTOR& boot)
     }
 }
 
+//********************************************************************************
 int main(int argc, char* argv[])
 {
     char driveLetter = ResolveDriveLetter(argc, argv);
@@ -231,5 +233,6 @@ int main(int argc, char* argv[])
     }
 
     printf("\nPhase 1 OK: raw MFT read pipeline confirmed working.\n");
+    getch();
     return 0;
 }
