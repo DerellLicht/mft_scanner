@@ -5,7 +5,7 @@
       <requestedPrivileges>
         <!-- Forces Windows to show the UAC prompt on every launch, and
              fail immediately (rather than silently) if the user declines. -->
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

@@ -18,16 +18,29 @@
 //   - Walking the full MFT and reconstructing the directory tree
 //   - Filtering output to a specific starting subfolder
 //
-// IMPORTANT: This must be run from an elevated (Administrator) command prompt. 
-//            Raw volume handles are only obtainable with elevated privileges.
+// IMPORTANT: This must be run from an elevated (Administrator) command
+// prompt. Raw volume handles are only obtainable with elevated privileges.
+// The program checks this itself at startup (see IsProcessElevated) and
+// exits with a clear message rather than attempting to self-elevate.
+// (Self-elevation via a manifest's requireAdministrator was tried and
+// rejected for this template: Windows cannot attach an elevated child
+// process to a non-elevated parent's console, so it always opens a new
+// console window to do so - there's no clean way around that at the OS
+// level for a plain console app. Requiring the user to already be in an
+// elevated prompt keeps everything in one console with no popups.)
 //
 // Build (TDM32, C++11): see accompanying Makefile.
+
+// TOKEN_ELEVATION / TokenElevation require Vista+; declare that target
+// before windows.h is included so the type is available.
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
 
 #include <windows.h>
 #include <cstdio>
 #include <cstdint>
 #include <string>
-#include <conio.h>   //  getch()
 
 // ---------------------------------------------------------------------
 // NTFS boot sector (BIOS Parameter Block), exactly 512 bytes on disk.
@@ -146,9 +159,42 @@ static uint32_t ComputeMftRecordSize(const NTFS_BOOT_SECTOR& boot)
     }
 }
 
-//********************************************************************************
+// ---------------------------------------------------------------------
+// Checks whether the current process is running with an elevated
+// (Administrator) token. Used at startup so we can fail with a clear
+// message in our own console instead of letting the raw volume open
+// fail deeper in the program, or relying on a manifest to auto-elevate
+// (which would open a separate console - see note at top of file).
+// ---------------------------------------------------------------------
+static bool IsProcessElevated()
+{
+    HANDLE hToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        return false;
+    }
+
+    TOKEN_ELEVATION elevation;
+    DWORD size = sizeof(elevation);
+    bool elevated = false;
+    if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &size))
+    {
+        elevated = (elevation.TokenIsElevated != 0);
+    }
+
+    CloseHandle(hToken);
+    return elevated;
+}
+
 int main(int argc, char* argv[])
 {
+    if (!IsProcessElevated())
+    {
+        printf("This program requires Administrator privileges to read raw NTFS volumes.\n");
+        printf("Please re-run from an elevated (Administrator) Command Prompt.\n");
+        return 1;
+    }
+
     char driveLetter = ResolveDriveLetter(argc, argv);
     printf("Target volume: %c:\n", driveLetter);
 
@@ -233,6 +279,5 @@ int main(int argc, char* argv[])
     }
 
     printf("\nPhase 1 OK: raw MFT read pipeline confirmed working.\n");
-    getch();
     return 0;
 }

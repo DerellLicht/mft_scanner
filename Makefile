@@ -16,7 +16,8 @@ WINDRES  := d:/llvm/bin/i686-w64-mingw32-windres.exe
 # before any standard header is included, so we do it as a compiler
 # flag rather than relying on source-file include order.
 # CXXFLAGS := -std=g++11 -Wall -Wextra -O2 -D__USE_MINGW_ANSI_STDIO=1
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -static 
+CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -static
+# -mconsole
 #CXXFLAGS += -DUNICODE -D_UNICODE
 
 TARGET   := mft_reader.exe
@@ -32,7 +33,7 @@ all: $(TARGET)
 # Final link pulls in both the compiled source and the compiled resource object 
 # (the embedded manifest) so the elevation request ships inside the .exe.
 $(TARGET): $(SRC) $(RES_OBJ)
-	$(CXX) $(CXXFLAGS) -o $@ $(SRC) $(RES_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $(SRC) $(RES_OBJ) -lkernel32
 
 # windres compiles the .rc (which just points at the .manifest file) into
 # a linkable COFF object.
