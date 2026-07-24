@@ -75,6 +75,9 @@ OBJS = $(CPPSRC:.cpp=.o) rc.o
 %.o: %.cpp
 	$(TOOLS)/$(GNAME) $(CFLAGS) $< -o $@
 
+#  build these targets even if there are files by these names
+.PHONY: all clean
+
 all: $(BIN)
 
 clean:
