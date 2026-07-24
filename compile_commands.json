@@ -1,0 +1,17 @@
+[
+ {
+  "directory": "D:\\SourceCode\\Git\\mft_scanner",
+  "arguments": [
+   "D:/llvm/bin/i686-w64-mingw32-clang++.exe",
+   "-Wall",
+   "-Wextra",
+   "-O3",
+   "-c",
+   "-Weffc++",
+   "mft_reader.cpp",
+   "-o",
+   "mft_reader.o"
+  ],
+  "file": "mft_reader.cpp"
+ }
+]

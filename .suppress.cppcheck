@@ -1,0 +1,6 @@
+constParameter:mft_reader.cpp:110
+unusedFunction:mft_reader.cpp:215
+unusedFunction:mft_reader.cpp:224
+
+unusedStructMember
+missingIncludeSystem

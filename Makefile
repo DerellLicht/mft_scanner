@@ -20,7 +20,7 @@ GNAME:=g++
 WRNAME:=windres.exe
 else
 ifeq ($(USE_CLANG),YES)
-TOOLS:=d:\llvm\bin
+TOOLS:=d:/llvm/bin
 GNAME:=i686-w64-mingw32-clang++.exe
 WRNAME:=i686-w64-mingw32-windres.exe
 else
@@ -67,7 +67,7 @@ BIN := $(BASE).exe
 
 CPPSRC:=$(BASE).cpp 
 
-OBJS = $(CPPSRC:.cpp=.o) rc.o
+OBJS := $(CPPSRC:.cpp=.o) rc.o
 
 # LIBS:=-lshlwapi -lcomdlg32
 
@@ -85,13 +85,13 @@ clean:
 
 dist:
 	rm -f $(BASE).zip
-	zip $(BASE).zip $(BIN) Readme.md LICENSE.txt
+	zip $(BASE).zip $(BIN) README.md LICENSE.txt
 
 wc:
 	wc -l $(CPPSRC)
 
 cppc:
-	cmd /C "cppcheck --project=compile_commands.json --check-level=exhaustive --enable=all --std=c++14 --suppressions-list=./.suppress.cppcheck"
+	cmd /C "cppcheck --project=compile_commands.json --enable=all --suppressions-list=./.suppress.cppcheck"
 
 check:
 	cmd /C "d:\llvm\bin\clang-tidy.exe $(CPPSRC)"
@@ -102,7 +102,7 @@ depend:
 # note: though all other utilities can accept forward slash in paths,
 #       windres cannot... 
 rc.o: $(BASE).rc $(MANIFEST)
-	$(TOOLS)\$(WRNAME) $< -O COFF -o $@
+	$(TOOLS)/$(WRNAME) $< -O COFF -o $@
 
 $(BIN): $(OBJS)
 	$(TOOLS)/$(GNAME) $(OBJS) $(LFLAGS) -o $(BIN) $(LIBS) 
