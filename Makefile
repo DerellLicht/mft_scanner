@@ -69,7 +69,7 @@ CPPSRC:=$(BASE).cpp
 
 OBJS = $(CPPSRC:.cpp=.o) rc.o
 
-LIBS:=-lshlwapi -lcomdlg32
+# LIBS:=-lshlwapi -lcomdlg32
 
 #**************************************************************************
 %.o: %.cpp

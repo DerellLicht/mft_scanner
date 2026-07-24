@@ -242,7 +242,7 @@ static void WriteWideLine(HANDLE hStdOut, bool isConsole, const std::wstring& te
 }
 
 // ---------------------------------------------------------------------
-int main(int argc, char* argv[]) // NOLINT
+int main(int argc, char* argv[])
 {
     if (!IsProcessElevated())
     {
