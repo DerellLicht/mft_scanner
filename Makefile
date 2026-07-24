@@ -1,44 +1,107 @@
-# Makefile for mft_reader
-# Toolchain: TDM32 (g++ + windres), C++11
-#
-# Switch to TDM64 by overriding CXX/WINDRES on the command line, e.g.:
-#   make CXX=d:/tdm64/bin/g++ WINDRES=d:/tdm64/bin/windres.exe
+# makefile for franklin app
+# SHELL=cmd.exe
+USE_DEBUG = NO
+USE_64BIT = NO
+USE_UNICODE = NO
+USE_CLANG = YES
+# use -static for clang/llvm and cygwin/mingw
+USE_STATIC = YES
 
-# CXX      := d:/tdm32/bin/g++.exe
-CXX      := d:/llvm/bin/i686-w64-mingw32-clang++.exe
-# CXX      := C:/cygwin64/bin/i686-w64-mingw32-g++.exe
-WINDRES  := d:/llvm/bin/i686-w64-mingw32-windres.exe
+#  clang++ vs tdm g++
+#  clang gives *much* clearer compiler error messages...
+#  However, programs built with clang++ will require libc++.dll and libunwind.dll
+#  in order to be used elsewhere unless built with -static, 
+#  which significantly boosts file size)
+# llvm:  374784 bytes
+# tdm32: 232960 bytes
+ifeq ($(USE_64BIT),YES)
+TOOLS:=d:\tdm64\bin
+GNAME:=g++
+WRNAME:=windres.exe
+else
+ifeq ($(USE_CLANG),YES)
+TOOLS:=d:\llvm\bin
+GNAME:=i686-w64-mingw32-clang++.exe
+WRNAME:=i686-w64-mingw32-windres.exe
+else
+TOOLS:=d:\tdm32\bin
+GNAME:=g++
+WRNAME:=windres.exe
+endif
+endif
 
-# -D__USE_MINGW_ANSI_STDIO=1 fixes %llu (and other C99 format specifiers)
-# on TDM32's mingw.org-based runtime: it reroutes printf/sprintf/etc.
-# through GCC's own format implementation instead of the old msvcrt.dll
-# one, which never learned the "ll" length modifier. Must be defined
-# before any standard header is included, so we do it as a compiler
-# flag rather than relying on source-file include order.
-# CXXFLAGS := -std=g++11 -Wall -Wextra -O2 -D__USE_MINGW_ANSI_STDIO=1
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -static
-# -mconsole
-#CXXFLAGS += -DUNICODE -D_UNICODE
-
-TARGET   := mft_reader.exe
-SRC      := mft_reader.cpp
-RC       := mft_reader.rc
 MANIFEST := mft_reader.manifest
-RES_OBJ  := mft_reader_res.o
 
-.PHONY: all clean
+ifeq ($(USE_DEBUG),YES)
+CFLAGS := -Wall -Wextra -g -c
+LFLAGS := -g
+else
+CFLAGS := -Wall -Wextra -O3 -c
+LFLAGS := -s -O3
+endif
+# CFLAGS += -Weffc++
+ifeq ($(USE_64BIT),YES)
+CFLAGS += -DUSE_64BIT
+endif
 
-all: $(TARGET)
 
-# Final link pulls in both the compiled source and the compiled resource object 
-# (the embedded manifest) so the elevation request ships inside the .exe.
-$(TARGET): $(SRC) $(RES_OBJ)
-	$(CXX) $(CXXFLAGS) -o $@ $(SRC) $(RES_OBJ) -lkernel32
+ifeq ($(USE_UNICODE),YES)
+CFLAGS += -DUNICODE -D_UNICODE
+LiFLAGS += -dUNICODE -d_UNICODE
+LFLAGS += -dUNICODE -d_UNICODE
+endif
 
-# windres compiles the .rc (which just points at the .manifest file) into
-# a linkable COFF object.
-$(RES_OBJ): $(RC) $(MANIFEST)
-	$(WINDRES) $(RC) -O coff -o $(RES_OBJ)
+# This is required for *some* versions of makedepend
+IFLAGS += -DNOMAKEDEPEND
+
+ifeq ($(USE_STATIC),YES)
+LFLAGS += -static
+endif
+
+ifeq ($(USE_64BIT),NO)
+BASE := mft_reader
+else
+BASE := mft_reader64
+endif
+BIN := $(BASE).exe
+
+CPPSRC:=$(BASE).cpp 
+
+OBJS = $(CPPSRC:.cpp=.o) rc.o
+
+LIBS:=-lshlwapi -lcomdlg32
+
+#**************************************************************************
+%.o: %.cpp
+	$(TOOLS)/$(GNAME) $(CFLAGS) $< -o $@
+
+all: $(BIN)
 
 clean:
-	del /Q $(TARGET) $(RES_OBJ) 2>NUL || true
+	rm -f $(OBJS) $(BIN) *.zip
+
+dist:
+	rm -f $(BASE).zip
+	zip $(BASE).zip $(BIN) Readme.md LICENSE.txt
+
+wc:
+	wc -l $(CPPSRC)
+
+cppc:
+	cmd /C "cppcheck --project=compile_commands.json --check-level=exhaustive --enable=all --std=c++14 --suppressions-list=./.suppress.cppcheck"
+
+check:
+	cmd /C "d:\llvm\bin\clang-tidy.exe $(CPPSRC)"
+
+depend: 
+	makedepend $(IFLAGS) $(CPPSRC)
+
+# note: though all other utilities can accept forward slash in paths,
+#       windres cannot... 
+rc.o: $(BASE).rc $(MANIFEST)
+	$(TOOLS)\$(WRNAME) $< -O COFF -o $@
+
+$(BIN): $(OBJS)
+	$(TOOLS)/$(GNAME) $(OBJS) $(LFLAGS) -o $(BIN) $(LIBS) 
+
+# DO NOT DELETE

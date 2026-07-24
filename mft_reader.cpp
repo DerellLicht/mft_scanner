@@ -186,7 +186,63 @@ static bool IsProcessElevated()
     return elevated;
 }
 
-int main(int argc, char* argv[])
+// ---------------------------------------------------------------------
+// Unicode output infrastructure (for Phase 2 onward, once we're printing
+// real NTFS $FILE_NAME data - which is always stored as UTF-16LE on
+// disk regardless of any UNICODE/_UNICODE macro settings).
+//
+// NTFS filenames need wchar_t/WriteConsoleW, not printf/wprintf: MinGW's
+// older mingw.org-based runtimes (e.g. TDM32) don't correctly implement
+// the CRT's wide-stdio text-mode translation (_O_U16TEXT), and the
+// console code-page route (chcp 65001) has its own long history of
+// truncation/corruption bugs independent of toolchain. WriteConsoleW
+// talks directly to the console subsystem in native UTF-16, bypassing
+// all of that CRT/code-page machinery.
+//
+// The catch: WriteConsoleW only works when stdout is an actual console
+// object. If output is redirected to a file/pipe, WriteConsoleW returns
+// FALSE and silently writes nothing - no error, filenames just vanish
+// while everything else (plain printf output) keeps working fine. The
+// pair of functions below detects that up front and falls back to
+// UTF-8 + WriteFile for the redirected case, which is also the right
+// encoding choice for a redirected .txt destination.
+// ---------------------------------------------------------------------
+
+// Call once at startup with GetStdHandle(STD_OUTPUT_HANDLE). Returns
+// true if stdout is a live console (WriteConsoleW is safe to use),
+// false if it has been redirected to a file/pipe (fall back to UTF-8 +
+// WriteFile instead - see WriteWideLine).
+static bool StdoutIsConsole(HANDLE hStdOut)
+{
+    DWORD mode;
+    return GetConsoleMode(hStdOut, &mode) != 0;
+}
+
+// Writes a wide string to stdout correctly whether it's a live console
+// or has been redirected. isConsole should come from a single cached
+// StdoutIsConsole() call at startup, not re-checked per line.
+static void WriteWideLine(HANDLE hStdOut, bool isConsole, const std::wstring& text)
+{
+    if (isConsole)
+    {
+        DWORD written;
+        WriteConsoleW(hStdOut, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
+    }
+    else
+    {
+        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                                           nullptr, 0, nullptr, nullptr);
+        std::string utf8(utf8Len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                             &utf8[0], utf8Len, nullptr, nullptr);
+
+        DWORD written;
+        WriteFile(hStdOut, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+    }
+}
+
+// ---------------------------------------------------------------------
+int main(int argc, char* argv[]) // NOLINT
 {
     if (!IsProcessElevated())
     {
@@ -202,8 +258,8 @@ int main(int argc, char* argv[])
     if (hVolume == INVALID_HANDLE_VALUE)
     {
         DWORD err = GetLastError();
-        fprintf(stderr, "Failed to open volume (error %lu).\n", static_cast<unsigned long>(err));
-        fprintf(stderr, "This program must be run as Administrator.\n");
+        printf("Failed to open volume (error %lu).\n", static_cast<unsigned long>(err));
+        printf("This program must be run as Administrator.\n");
         return 1;
     }
 
@@ -212,14 +268,14 @@ int main(int argc, char* argv[])
     DWORD bytesRead = 0;
     if (!ReadFile(hVolume, &boot, sizeof(boot), &bytesRead, nullptr) || bytesRead != sizeof(boot))
     {
-        fprintf(stderr, "Failed to read boot sector.\n");
+        printf("Failed to read boot sector.\n");
         CloseHandle(hVolume);
         return 1;
     }
 
     if (memcmp(boot.oemId, "NTFS    ", 8) != 0)
     {
-        fprintf(stderr, "Volume %c: does not appear to be NTFS.\n", driveLetter);
+        printf("Volume %c: does not appear to be NTFS.\n", driveLetter);
         CloseHandle(hVolume);
         return 1;
     }
@@ -244,7 +300,7 @@ int main(int argc, char* argv[])
     seekPos.QuadPart = static_cast<LONGLONG>(mftOffsetBytes);
     if (!SetFilePointerEx(hVolume, seekPos, nullptr, FILE_BEGIN))
     {
-        fprintf(stderr, "Failed to seek to MFT.\n");
+        printf("Failed to seek to MFT.\n");
         CloseHandle(hVolume);
         return 1;
     }
@@ -252,7 +308,7 @@ int main(int argc, char* argv[])
     std::string recordBuf(mftRecordSize, '\0');
     if (!ReadFile(hVolume, &recordBuf[0], mftRecordSize, &bytesRead, nullptr) || bytesRead != mftRecordSize)
     {
-        fprintf(stderr, "Failed to read MFT record 0.\n");
+        printf("Failed to read MFT record 0.\n");
         CloseHandle(hVolume);
         return 1;
     }
@@ -274,7 +330,7 @@ int main(int argc, char* argv[])
 
     if (memcmp(header->signature, "FILE", 4) != 0)
     {
-        fprintf(stderr, "\nUnexpected signature - record may be corrupt or offsets are wrong.\n");
+        printf("\nUnexpected signature - record may be corrupt or offsets are wrong.\n");
         return 1;
     }
 
