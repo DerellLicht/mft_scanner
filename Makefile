@@ -1,4 +1,4 @@
-# makefile for franklin app
+# makefile for mft_reader
 # SHELL=cmd.exe
 USE_DEBUG = NO
 USE_64BIT = NO
@@ -11,7 +11,7 @@ USE_STATIC = YES
 #  clang gives *much* clearer compiler error messages...
 #  However, programs built with clang++ will require libc++.dll and libunwind.dll
 #  in order to be used elsewhere unless built with -static, 
-#  which significantly boosts file size)
+#  which significantly boosts file size
 # llvm:  374784 bytes
 # tdm32: 232960 bytes
 ifeq ($(USE_64BIT),YES)
@@ -47,7 +47,6 @@ endif
 
 ifeq ($(USE_UNICODE),YES)
 CFLAGS += -DUNICODE -D_UNICODE
-LiFLAGS += -dUNICODE -d_UNICODE
 LFLAGS += -dUNICODE -d_UNICODE
 endif
 

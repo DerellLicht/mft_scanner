@@ -1,5 +1,6 @@
 *.bak
 *.exe
 *.o
-output.txt
+output*.txt
 Makefile.orig
+mft_reader.phase*.cpp

@@ -11,6 +11,7 @@ Checks: |
   -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
   -cppcoreguidelines-macro-usage,
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
   modernize-*,
   -modernize-avoid-c-arrays,
   -modernize-use-trailing-return-type,
