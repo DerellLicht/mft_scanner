@@ -3,4 +3,4 @@
 *.o
 output*.txt
 Makefile.orig
-mft_reader.phase*.cpp
+history/
