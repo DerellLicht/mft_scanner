@@ -1,7 +1,7 @@
 # makefile for mft_reader
 # SHELL=cmd.exe
 USE_DEBUG = NO
-USE_64BIT = NO
+USE_64BIT = YES
 USE_UNICODE = NO
 USE_CLANG = YES
 # use -static for clang/llvm and cygwin/mingw
@@ -15,9 +15,12 @@ USE_STATIC = YES
 # llvm:  374784 bytes
 # tdm32: 232960 bytes
 ifeq ($(USE_64BIT),YES)
-TOOLS:=d:\tdm64\bin
-GNAME:=g++
-WRNAME:=windres.exe
+#TOOLS:=d:\tdm64\bin
+#GNAME:=g++
+#WRNAME:=windres.exe
+TOOLS:=d:/llvm/bin
+GNAME=x86_64-w64-mingw32-clang++
+WRNAME:=x86_64-w64-mingw32-windres.exe
 else
 ifeq ($(USE_CLANG),YES)
 TOOLS:=d:/llvm/bin
@@ -60,7 +63,7 @@ endif
 ifeq ($(USE_64BIT),NO)
 BASE := mft_reader
 else
-BASE := mft_reader64
+BASE := mft_reader
 endif
 BIN := $(BASE).exe
 
@@ -80,7 +83,7 @@ OBJS := $(CPPSRC:.cpp=.o) rc.o
 all: $(BIN)
 
 clean:
-	rm -f $(OBJS) $(BIN) *.zip
+	rm -f *.o *.exe *.zip
 
 dist:
 	rm -f $(BASE).zip
