@@ -93,7 +93,7 @@ wc:
 	wc -l $(CPPSRC)
 
 cppc:
-	cmd /C "cppcheck --project=compile_commands.json --enable=all --suppressions-list=./.suppress.cppcheck"
+	cmd /C "cppcheck --project=compile_commands.json --enable=all --check-level=exhaustive --suppressions-list=./.suppress.cppcheck"
 
 check:
 	cmd /C "d:\llvm\bin\clang-tidy.exe $(CPPSRC)"
