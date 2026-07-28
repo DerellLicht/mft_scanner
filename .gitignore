@@ -4,3 +4,4 @@
 output*.txt
 Makefile.orig
 history/
+disk_info.txt
