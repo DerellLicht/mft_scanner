@@ -46,6 +46,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <cwctype>
 
 // ---------------------------------------------------------------------
 // NTFS boot sector (BIOS Parameter Block), exactly 512 bytes on disk.
@@ -278,8 +280,30 @@ struct FlatEntry
     std::wstring name;
     uint64_t     fileSize {0};
     uint32_t     parentRecordNumber {0};
+    uint16_t     sequenceNumber {0};       // this record's own on-disk sequence number (MFT_RECORD_HEADER.
+                                            // sequenceNumber) - captured for every in-use record regardless
+                                            // of whether its own $FILE_NAME resolved, since any record can
+                                            // be referenced as someone else's parent
+    uint16_t     parentSequenceNumber {0}; // the sequence number this entry's $FILE_NAME expected its
+                                            // parent to have, from the high 16 bits of parentRecordReference
+                                            // - only meaningful when name/parentRecordNumber were resolved.
+                                            // See BuildFolderTree's stale-parent-reference check and the
+                                            // "Live-volume consistency" addendum in
+                                            // mft_reader_datarun_design.md
     bool         isDirectory {false};
     bool         inUse {false};
+    bool         isExtensionRecord {false}; // baseFileRecord != 0 - overflow attribute storage for
+                                             // another record, never has its own $FILE_NAME, and is
+                                             // never itself a node in the tree - see BuildFolderTree
+    bool         hasAttributeList {false};  // type 0x20 ($ATTRIBUTE_LIST) present in this record's own
+                                             // attribute list - a record with too many attributes to fit
+                                             // in one MFT slot (most commonly from heavy hard-linking)
+                                             // relocates some of them, including possibly its own
+                                             // $FILE_NAME, to extension records. ExtractRecordInfo does
+                                             // not follow this yet, so a record with hasAttributeList set
+                                             // and no resolved name is the leading hypothesis for the
+                                             // "unresolved base record" diagnostic bucket in
+                                             // BuildFlatEntryList.
 };
 
 struct FolderNode
@@ -303,7 +327,14 @@ struct FolderTree
     std::vector<uint32_t>   folderIndexOf;
     std::vector<uint32_t>   orphanedRecordNumbers;
     std::vector<uint32_t>   systemRecordNumbers;
+    std::vector<uint32_t>   staleParentRecordNumbers; // a parent slot resolved, but its ACTUAL sequence
+                                                        // number didn't match what this entry's own
+                                                        // $FILE_NAME expected - the parent record has been
+                                                        // reused since. See BuildFolderTree and the
+                                                        // "Live-volume consistency" addendum in
+                                                        // mft_reader_datarun_design.md
     uint32_t                rootFolderSlot {FOLDER_INDEX_SENTINEL};
+    uint64_t                skippedExtensionRecordCount {0}; // sanity-checked against Step 1's own count
 };
 
 // ---------------------------------------------------------------------
@@ -448,17 +479,25 @@ static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER
 
 // ---------------------------------------------------------------------
 // Decodes a single $FILE_NAME attribute's content (the bytes right
-// after its ATTR_RESIDENT_HEADER) into a parent record number and a
-// std::wstring name. Content is UTF-16LE on disk; copied directly since
-// this target is little-endian x86, matching the rest of this file's
-// approach to on-disk structures.
+// after its ATTR_RESIDENT_HEADER) into a parent record number, the
+// parent's *expected* sequence number, and a std::wstring name.
+// parentRecordReference packs both: low 48 bits are the parent's
+// record number, high 16 bits are the sequence number the parent
+// record was expected to have at the time this $FILE_NAME was
+// written. That sequence number matters for stale-reference detection
+// - see the "Live-volume consistency" addendum in
+// mft_reader_datarun_design.md and BuildFolderTree's use of it.
+// Content is UTF-16LE on disk; copied directly since this target is
+// little-endian x86, matching the rest of this file's approach to
+// on-disk structures.
 // ---------------------------------------------------------------------
 static void DecodeFileNameAttribute(const uint8_t* fileNameContent, uint32_t& outParentRecordNumber,
-    uint8_t& outNameType, std::wstring& outName)
+    uint16_t& outParentSequenceNumber, uint8_t& outNameType, std::wstring& outName)
 {
     const ATTR_FILENAME_HEADER* fn = reinterpret_cast<const ATTR_FILENAME_HEADER*>(fileNameContent);
 
     outParentRecordNumber = static_cast<uint32_t>(fn->parentRecordReference & 0x0000FFFFFFFFFFFFULL);
+    outParentSequenceNumber = static_cast<uint16_t>((fn->parentRecordReference >> 48) & 0xFFFFULL);
     outNameType = fn->nameType;
 
     const wchar_t* nameChars = reinterpret_cast<const wchar_t*>(fileNameContent + sizeof(ATTR_FILENAME_HEADER));
@@ -472,6 +511,13 @@ static void DecodeFileNameAttribute(const uint8_t* fileNameContent, uint32_t& ou
 // $FILE_NAME wins over a DOS-namespace one; DOS is only used if it's
 // the only $FILE_NAME present. File size comes from the unnamed
 // (default) $DATA stream only, matching WalkAttributes' own reporting.
+// Also records whether an $ATTRIBUTE_LIST attribute is present (see
+// FlatEntry::hasAttributeList) - this walk only ever looks at the
+// record's own attribute list, never follows $ATTRIBUTE_LIST to check
+// extension records for a relocated $FILE_NAME, so its presence
+// alongside a failed name lookup is the leading hypothesis for that
+// failure (see the "unresolved base record" diagnostic in
+// BuildFlatEntryList).
 // Returns false if the record has no usable $FILE_NAME at all (should
 // not normally happen for an in-use record, but a corrupt/torn record
 // is defensively handled rather than crashing the pass).
@@ -480,6 +526,12 @@ static bool ExtractRecordInfo(const std::string& recordBuf, const MFT_RECORD_HEA
 {
     outEntry.isDirectory = (header.flags & 0x0002) != 0;
     outEntry.inUse = (header.flags & 0x0001) != 0;
+    // Captured unconditionally, straight from the header, same as
+    // isDirectory/inUse above - any in-use record can be referenced as
+    // someone else's parent, regardless of whether its own $FILE_NAME
+    // resolves, so this needs to be available even when haveName ends
+    // up false. See BuildFolderTree's stale-parent-reference check.
+    outEntry.sequenceNumber = header.sequenceNumber;
 
     bool haveName = false;
     bool haveNonDosName = false;
@@ -496,7 +548,10 @@ static bool ExtractRecordInfo(const std::string& recordBuf, const MFT_RECORD_HEA
             break; // malformed - stop, same defensive rule as WalkAttributes
         }
 
-        if (attr->type == 0x30 && !attr->nonResident) { // $FILE_NAME, always resident in practice
+        if (attr->type == 0x20) { // $ATTRIBUTE_LIST - see FlatEntry::hasAttributeList
+            outEntry.hasAttributeList = true;
+        }
+        else if (attr->type == 0x30 && !attr->nonResident) { // $FILE_NAME, always resident in practice
             if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_RESIDENT_HEADER) <= recordBuf.size()) {
                 const ATTR_RESIDENT_HEADER* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
                     recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
@@ -510,14 +565,16 @@ static bool ExtractRecordInfo(const std::string& recordBuf, const MFT_RECORD_HEA
 
                 if (contentOffset + sizeof(ATTR_FILENAME_HEADER) <= recordBuf.size()) {
                     uint32_t parentRecordNumber = 0;
+                    uint16_t parentSequenceNumber = 0;
                     uint8_t  nameType = 0;
                     std::wstring name;
                     DecodeFileNameAttribute(reinterpret_cast<const uint8_t*>(recordBuf.data() + contentOffset),
-                        parentRecordNumber, nameType, name);
+                        parentRecordNumber, parentSequenceNumber, nameType, name);
 
                     bool isDos = (nameType == FILENAME_NAMESPACE_DOS);
                     if (!haveName || (haveName && !haveNonDosName && !isDos)) {
                         outEntry.parentRecordNumber = parentRecordNumber;
+                        outEntry.parentSequenceNumber = parentSequenceNumber;
                         outEntry.name = name;
                         haveName = true;
                         haveNonDosName = haveNonDosName || !isDos;
@@ -810,6 +867,15 @@ static bool ResolveRecordOffset(uint64_t recordNumber, uint32_t mftRecordSize, u
 // wrong with the extent map or the read itself, rather than "the $MFT
 // probably has more than one extent and we haven't accounted for it
 // yet" - that ambiguity is what this pass resolves.
+//
+// outFixupOk reports ApplyFixup's own result - true if every sector's
+// update-sequence check value matched (a clean, untorn read), false if
+// any didn't. Only meaningful when this function returns Success (the
+// only case ApplyFixup runs at all); callers should not read it
+// otherwise. A mismatch isn't treated as fatal here - see ApplyFixup's
+// own comment - but the caller can now use it as a live-volume-churn
+// signal instead of the mismatch being silently discarded. See the
+// "Live-volume consistency" addendum in mft_reader_datarun_design.md.
 // ---------------------------------------------------------------------
 enum class MftRecordReadResult
 {
@@ -821,8 +887,10 @@ enum class MftRecordReadResult
 };
 
 static MftRecordReadResult ReadMftRecord(HANDLE hVolume, const std::vector<DataRunExtent>& mftExtents,
-    uint32_t clusterSize, uint32_t mftRecordSize, uint64_t recordNumber, std::string& recordBuf)
+    uint32_t clusterSize, uint32_t mftRecordSize, uint64_t recordNumber, std::string& recordBuf, bool& outFixupOk)
 {
+    outFixupOk = true; // meaningful only when this function returns Success - see comment above
+
     uint64_t byteOffset = 0;
     if (!ResolveRecordOffset(recordNumber, mftRecordSize, clusterSize, mftExtents, byteOffset)) {
         return MftRecordReadResult::IoFailure; // record's VCN isn't covered by any known extent
@@ -843,7 +911,7 @@ static MftRecordReadResult ReadMftRecord(HANDLE hVolume, const std::vector<DataR
     const MFT_RECORD_HEADER* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
 
     if (memcmp(header->signature, "FILE", 4) == 0) {
-        ApplyFixup(recordBuf, *header); // torn/mismatched checksum isn't fatal here - see ApplyFixup's own comment
+        outFixupOk = ApplyFixup(recordBuf, *header); // captured, not discarded - see comment above
         return MftRecordReadResult::Success;
     }
     if (memcmp(header->signature, "BAAD", 4) == 0) {
@@ -878,7 +946,8 @@ static MftRecordReadResult ReadMftRecord(HANDLE hVolume, const std::vector<DataR
 // potentially multi-million-record MFT.
 // ---------------------------------------------------------------------
 static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vector<DataRunExtent>& mftExtents,
-    uint32_t clusterSize, uint32_t mftRecordSize, uint64_t totalRecordCount, bool stdoutIsConsole, HANDLE hStdOut)
+    uint32_t clusterSize, uint32_t mftRecordSize, uint64_t totalRecordCount, bool stdoutIsConsole, HANDLE hStdOut,
+    std::vector<uint32_t>& outUnresolvedBaseRecordNumbers)
 {
     std::vector<FlatEntry> flatEntries(totalRecordCount);
     std::string recordBuf;
@@ -890,10 +959,20 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
     uint64_t corruptRecordCount = 0;
     uint64_t unexpectedDataCount = 0;
     uint64_t firstUnexpectedDataRecord = UINT64_MAX; // sentinel - see report at the end
+    uint64_t fixupMismatchCount = 0;                 // any in-use record whose update-sequence check failed -
+                                                      // see the "Live-volume consistency" addendum in
+                                                      // mft_reader_datarun_design.md
+    uint64_t unresolvedBaseRecordFixupMismatchCount = 0; // subset of the above that also had no $FILE_NAME -
+                                                          // a high overlap here is the live-volume-churn signal
+    uint64_t unresolvedBaseRecordAttributeListCount = 0; // subset of unresolvedBaseRecordCount that also had
+                                                          // an $ATTRIBUTE_LIST attribute - a high overlap here
+                                                          // supports the relocated-$FILE_NAME/hard-link
+                                                          // hypothesis instead - see FlatEntry::hasAttributeList
 
     for (uint64_t recordNumber = 0; recordNumber < totalRecordCount; ++recordNumber) {
+        bool fixupOk = true;
         MftRecordReadResult readResult =
-            ReadMftRecord(hVolume, mftExtents, clusterSize, mftRecordSize, recordNumber, recordBuf);
+            ReadMftRecord(hVolume, mftExtents, clusterSize, mftRecordSize, recordNumber, recordBuf, fixupOk);
         if (readResult != MftRecordReadResult::Success) {
             switch (readResult) {
                 case MftRecordReadResult::IoFailure:     ++ioFailureCount;     break;
@@ -915,8 +994,21 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
             continue; // not in use - stale/deleted record, leave as default
         }
 
+        if (!fixupOk) {
+            ++fixupMismatchCount;
+        }
+
         FlatEntry entry;
         bool haveName = ExtractRecordInfo(recordBuf, *header, entry);
+
+        // baseFileRecord != 0 marks this as an *extension* record - overflow
+        // storage for another record's attributes (most often extra $DATA
+        // data-runs for a heavily fragmented file), reached via that base
+        // record's own $ATTRIBUTE_LIST. Set unconditionally from the header
+        // field itself, independent of whether a $FILE_NAME was found, so
+        // Step 3 can skip these outright rather than misfiling them as
+        // orphans - see BuildFolderTree.
+        entry.isExtensionRecord = (header->baseFileRecord & 0x0000FFFFFFFFFFFFULL) != 0;
 
         // Store the entry even when no $FILE_NAME was resolved.
         // isDirectory/inUse come straight from the record header inside
@@ -933,23 +1025,31 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
         flatEntries[recordNumber] = entry;
 
         if (!haveName) {
-            // baseFileRecord != 0 marks this as an *extension* record -
-            // overflow storage for another record's attributes (most often
-            // extra $DATA data-runs for a heavily fragmented file), reached
-            // via that base record's own $ATTRIBUTE_LIST. Extension records
-            // never carry their own $FILE_NAME by design - only the base
-            // record does - so this is expected, not a parsing failure, and
-            // is very plausibly the majority of this bucket on a volume with
-            // large fragmented files (ISOs, VM images, media). A record with
-            // baseFileRecord == 0 IS its own base record and genuinely
-            // should have had a $FILE_NAME somewhere in its own attribute
-            // list - that bucket is the one actually worth investigating
-            // further if it turns out large.
-            if ((header->baseFileRecord & 0x0000FFFFFFFFFFFFULL) != 0) {
+            // Extension records never carry their own $FILE_NAME by design -
+            // only the base record does - so that bucket is expected, not a
+            // parsing failure, and is very plausibly the majority of this
+            // bucket on a volume with large fragmented files (ISOs, VM
+            // images, media). A record with baseFileRecord == 0 IS its own
+            // base record and genuinely should have had a $FILE_NAME
+            // somewhere in its own attribute list - that bucket is the one
+            // actually worth investigating further, so its record numbers
+            // are collected for the caller to report/inspect, and both its
+            // fixup status and $ATTRIBUTE_LIST presence are tracked
+            // separately to test which explanation (torn read from
+            // live-volume churn, vs. a relocated $FILE_NAME this program
+            // doesn't follow yet) actually accounts for it.
+            if (entry.isExtensionRecord) {
                 ++extensionRecordCount;
             }
             else {
                 ++unresolvedBaseRecordCount;
+                outUnresolvedBaseRecordNumbers.push_back(static_cast<uint32_t>(recordNumber));
+                if (!fixupOk) {
+                    ++unresolvedBaseRecordFixupMismatchCount;
+                }
+                if (entry.hasAttributeList) {
+                    ++unresolvedBaseRecordAttributeListCount;
+                }
             }
             continue; // nothing to show in the progress line
         }
@@ -975,6 +1075,51 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
     if (unresolvedBaseRecordCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(unresolvedBaseRecordCount) +
             L" base record(s) in use with NO $FILE_NAME found - unexpected, worth a closer look)\n";
+        WriteWideLine(hStdOut, stdoutIsConsole, line);
+
+        // Fixup-mismatch overlap: a high fraction here supports "torn
+        // read from live-volume churn during the scan" as the cause; a
+        // low fraction means something else is going on and this bucket
+        // is worth investigating further. See the "Live-volume
+        // consistency" addendum in mft_reader_datarun_design.md.
+        std::wstring fixupLine = L"    of those, " + std::to_wstring(unresolvedBaseRecordFixupMismatchCount) +
+            L" of " + std::to_wstring(unresolvedBaseRecordCount) +
+            L" also had a fixup (update-sequence) checksum mismatch\n";
+        WriteWideLine(hStdOut, stdoutIsConsole, fixupLine);
+
+        // $ATTRIBUTE_LIST overlap: a high fraction here supports "this
+        // record's own $FILE_NAME was relocated to an extension record
+        // (most commonly from heavy hard-linking) and this program
+        // doesn't follow $ATTRIBUTE_LIST to find it yet" as the cause.
+        // See the "Live-volume consistency" addendum in
+        // mft_reader_datarun_design.md.
+        std::wstring attrListLine = L"    of those, " + std::to_wstring(unresolvedBaseRecordAttributeListCount) +
+            L" of " + std::to_wstring(unresolvedBaseRecordCount) +
+            L" have an $ATTRIBUTE_LIST attribute (possible relocated $FILE_NAME)\n";
+        WriteWideLine(hStdOut, stdoutIsConsole, attrListLine);
+
+        // Per-record-number listing retired - the fixup and $ATTRIBUTE_LIST
+        // overlap ratios above now explain this bucket (heavy hard-linking
+        // relocating $FILE_NAME to an extension record this program
+        // doesn't follow - see the "Live-volume consistency" addendum in
+        // mft_reader_datarun_design.md), so enumerating every record
+        // number is no longer worth the output size. outUnresolvedBase-
+        // RecordNumbers is still collected by BuildFlatEntryList and
+        // available here if a specific record ever needs inspecting again.
+        // std::wstring recordListLine = L"    record number(s): ";
+        // for (size_t i = 0; i < outUnresolvedBaseRecordNumbers.size(); ++i) {
+        //     if (i > 0) {
+        //         recordListLine += L", ";
+        //     }
+        //     recordListLine += std::to_wstring(outUnresolvedBaseRecordNumbers[i]);
+        // }
+        // recordListLine += L"\n";
+        // WriteWideLine(hStdOut, stdoutIsConsole, recordListLine);
+    }
+    if (fixupMismatchCount > 0) {
+        std::wstring line = L"  (" + std::to_wstring(fixupMismatchCount) +
+            L" record(s) overall had a fixup checksum mismatch - a torn/mid-write read, not "
+            L"necessarily fatal to that record's own data)\n";
         WriteWideLine(hStdOut, stdoutIsConsole, line);
     }
     if (ioFailureCount > 0) {
@@ -1017,9 +1162,26 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
 //            orphanedRecordNumbers (everything else) instead - see the
 //            spec's "Orphaned entries" section for why.
 //
+// Extension records (isExtensionRecord) are skipped outright in both
+// stages, not linked and not orphaned. They're overflow attribute
+// storage for another record, never a node in the directory tree in
+// their own right - without this, every one of them fails to resolve
+// a parent (their parentRecordNumber is left at its default, since
+// ExtractRecordInfo never found a $FILE_NAME to read one from) and
+// gets miscounted as an orphan, even though nothing is actually wrong.
+//
 // Root handling: record ROOT_RECORD_NUMBER (5) is its own parent on
 // disk, so it's recognized here and never attached under any parent -
 // its FolderNode slot is still created normally, just never linked in.
+//
+// Stale-parent-reference check: even once a parent slot resolves, its
+// sequence number is cross-checked against what this entry's own
+// $FILE_NAME expected (see FlatEntry::parentSequenceNumber). A
+// mismatch means the parent record number has been reused for a
+// different file/folder since this entry's $FILE_NAME was read - the
+// entry is routed to staleParentRecordNumbers rather than linked under
+// an unrelated folder. See the "Live-volume consistency" addendum in
+// mft_reader_datarun_design.md.
 // ---------------------------------------------------------------------
 static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, bool stdoutIsConsole, HANDLE hStdOut)
 {
@@ -1029,7 +1191,7 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
     // --- Setup: count folders, then allocate + populate folderNodes/folderIndexOf together ---
     uint32_t totalFolderCount = 0;
     for (uint32_t i = 0; i < totalRecordCount; ++i) {
-        if (flatEntries[i].inUse && flatEntries[i].isDirectory) {
+        if (flatEntries[i].inUse && flatEntries[i].isDirectory && !flatEntries[i].isExtensionRecord) {
             ++totalFolderCount;
         }
     }
@@ -1039,7 +1201,7 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
 
     uint32_t nextFolderSlot = 0;
     for (uint32_t i = 0; i < totalRecordCount; ++i) {
-        if (flatEntries[i].inUse && flatEntries[i].isDirectory) {
+        if (flatEntries[i].inUse && flatEntries[i].isDirectory && !flatEntries[i].isExtensionRecord) {
             tree.folderNodes[nextFolderSlot].flatEntryIndex = i;
             tree.folderIndexOf[i] = nextFolderSlot;
             if (i == ROOT_RECORD_NUMBER) {
@@ -1055,6 +1217,10 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
         if (!flatEntries[i].inUse) {
             continue;
         }
+        if (flatEntries[i].isExtensionRecord) {
+            ++tree.skippedExtensionRecordCount;
+            continue; // never a tree node - see comment above
+        }
         if (i == ROOT_RECORD_NUMBER && flatEntries[i].parentRecordNumber == ROOT_RECORD_NUMBER) {
             continue; // root is its own parent on disk - never attached anywhere
         }
@@ -1067,6 +1233,24 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
             else {
                 tree.orphanedRecordNumbers.push_back(i);
             }
+            continue;
+        }
+
+        // Sequence-number cross-check: the parent record we're about to
+        // link under must still be the same "generation" of record this
+        // entry's $FILE_NAME pointed at when we read it. NTFS can reuse a
+        // record number for a completely unrelated file/folder if the
+        // original was deleted mid-scan - flatEntries[parentRecordNumber].
+        // sequenceNumber is that parent's ACTUAL on-disk sequence number
+        // as of when we read it; flatEntries[i].parentSequenceNumber is
+        // what this entry's own $FILE_NAME expected it to be. A mismatch
+        // means the parent slot has been reused since - the relationship
+        // our snapshot implies may no longer hold, so it isn't linked.
+        // See the "Live-volume consistency" addendum in
+        // mft_reader_datarun_design.md.
+        uint32_t parentRecordNumber = flatEntries[i].parentRecordNumber;
+        if (flatEntries[parentRecordNumber].sequenceNumber != flatEntries[i].parentSequenceNumber) {
+            tree.staleParentRecordNumbers.push_back(i);
             continue;
         }
 
@@ -1086,6 +1270,84 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
     }
 
     return tree;
+}
+
+// ---------------------------------------------------------------------
+// Looks up a FlatEntry by record number. Trivial today - a FlatEntry's
+// index in the vector already *is* the record number (see the
+// FlatEntry/FolderNode summary comment near their definitions) - but
+// wrapped in a named function so callers that just want "the name/size
+// for this record number" (printing a folder's children below, or a
+// later real lookup against a specific record) don't need to know or
+// depend on that indexing detail directly; this is the seam to change
+// if that ever stops being true. Bounds-checks defensively rather than
+// assuming recordNumber is always valid, since callers may be passing
+// in a number that came from elsewhere (a folder's subdirs/files
+// vector, a future user-supplied record number, etc.), not just a loop
+// already bounded by flatEntries.size().
+// ---------------------------------------------------------------------
+static const FlatEntry* LookupEntry(const std::vector<FlatEntry>& flatEntries, uint32_t recordNumber)
+{
+    if (recordNumber >= flatEntries.size()) {
+        return nullptr;
+    }
+    return &flatEntries[recordNumber];
+}
+
+// ---------------------------------------------------------------------
+// Prints a folder's direct children by name via LookupEntry - subfolders
+// first, then files with their size - sorted case-insensitively within
+// each group so the output lines up for easy comparison against a
+// normal alphabetized directory listing (e.g. ndir). This is a
+// diagnostic convenience, not part of the Phase 3 build itself - Step 3
+// already noted that sort/display order is an output-time concern, not
+// a build-time one (see mft_reader_phase3_final.md, "What Step 3
+// deliberately does *not* cover").
+// ---------------------------------------------------------------------
+static void PrintFolderChildren(const FolderNode& folder, const std::vector<FlatEntry>& flatEntries,
+    bool stdoutIsConsole, HANDLE hStdOut)
+{
+    auto caseInsensitiveLess = [](const std::wstring& a, const std::wstring& b) {
+        size_t len = (a.size() < b.size()) ? a.size() : b.size();
+        for (size_t i = 0; i < len; ++i) {
+            wchar_t ca = static_cast<wchar_t>(towlower(a[i]));
+            wchar_t cb = static_cast<wchar_t>(towlower(b[i]));
+            if (ca != cb) {
+                return ca < cb;
+            }
+        }
+        return a.size() < b.size();
+    };
+
+    auto byName = [&](uint32_t a, uint32_t b) {
+        const FlatEntry* ea = LookupEntry(flatEntries, a);
+        const FlatEntry* eb = LookupEntry(flatEntries, b);
+        return (ea && eb) ? caseInsensitiveLess(ea->name, eb->name) : false;
+    };
+
+    std::vector<uint32_t> sortedSubdirs = folder.subdirs;
+    std::sort(sortedSubdirs.begin(), sortedSubdirs.end(), byName);
+
+    std::vector<uint32_t> sortedFiles = folder.files;
+    std::sort(sortedFiles.begin(), sortedFiles.end(), byName);
+
+    for (uint32_t recordNumber : sortedSubdirs) {
+        const FlatEntry* entry = LookupEntry(flatEntries, recordNumber);
+        if (!entry) {
+            continue; // shouldn't happen - record number came from this same flatEntries vector
+        }
+        std::wstring line = L"  [DIR]  " + entry->name + L"  (record " + std::to_wstring(recordNumber) + L")\n";
+        WriteWideLine(hStdOut, stdoutIsConsole, line);
+    }
+    for (uint32_t recordNumber : sortedFiles) {
+        const FlatEntry* entry = LookupEntry(flatEntries, recordNumber);
+        if (!entry) {
+            continue;
+        }
+        std::wstring line = L"  " + std::to_wstring(entry->fileSize) + L"  " + entry->name +
+            L"  (record " + std::to_wstring(recordNumber) + L")\n";
+        WriteWideLine(hStdOut, stdoutIsConsole, line);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1378,8 +1640,9 @@ int main(int argc, char* argv[])
 
     printf("\n-- Phase 3: Step 1 - flat entry list --\n");
     printf("Total MFT records to scan: %llu\n", static_cast<unsigned long long>(totalRecordCount));
-    std::vector<FlatEntry> flatEntries =
-        BuildFlatEntryList(hVolume, mftExtents, clusterSize, mftRecordSize, totalRecordCount, stdoutIsConsole, hStdOut);
+    std::vector<uint32_t> unresolvedBaseRecordNumbers;
+    std::vector<FlatEntry> flatEntries = BuildFlatEntryList(hVolume, mftExtents, clusterSize, mftRecordSize,
+        totalRecordCount, stdoutIsConsole, hStdOut, unresolvedBaseRecordNumbers);
 
     CloseHandle(hVolume); // done with the volume - everything else works from flatEntries in memory
 
@@ -1398,9 +1661,18 @@ int main(int argc, char* argv[])
     printf("Folders found:        %zu\n", tree.folderNodes.size());
     printf("System records:       %zu\n", tree.systemRecordNumbers.size());
     printf("Orphaned entries:     %zu\n", tree.orphanedRecordNumbers.size());
+    printf("Stale parent references (parent record reused): %zu\n", tree.staleParentRecordNumbers.size());
+    printf("Extension records skipped (not tree nodes): %llu\n",
+        static_cast<unsigned long long>(tree.skippedExtensionRecordCount));
     if (tree.rootFolderSlot != FOLDER_INDEX_SENTINEL) {
         const FolderNode& root = tree.folderNodes[tree.rootFolderSlot];
         printf("Root: %zu direct subfolders, %zu direct files\n", root.subdirs.size(), root.files.size());
+        // Root-children name dump - served its purpose confirming the
+        // metadata-file/root-count hypothesis, no longer needed each run.
+        // PrintFolderChildren itself is left in place (unused) as
+        // reference code for later real lookups - see its own comment.
+        // printf("\n-- Root's direct children --\n");
+        // PrintFolderChildren(root, flatEntries, stdoutIsConsole, hStdOut);
     }
     else {
         printf("Warning: root record (%u) was not found as a folder.\n", ROOT_RECORD_NUMBER);
