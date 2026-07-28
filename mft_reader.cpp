@@ -38,7 +38,7 @@
 // TOKEN_ELEVATION / TokenElevation require Vista+; declare that target
 // before windows.h is included so the type is available.
 #ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0600
+#define _WIN32_WINNT 0x0600   //  NOLINT(bugprone-reserved-identifier)
 #endif
 
 #include <windows.h>
@@ -204,7 +204,7 @@ struct ATTR_NONRESIDENT_HEADER
 // WriteFile instead - see WriteWideLine).
 static bool StdoutIsConsole(HANDLE hStdOut)
 {
-    DWORD mode;
+    DWORD mode {};
     return GetConsoleMode(hStdOut, &mode) != 0;
 }
 
@@ -213,8 +213,8 @@ static bool StdoutIsConsole(HANDLE hStdOut)
 // StdoutIsConsole() call at startup, not re-checked per line.
 static void WriteWideLine(HANDLE hStdOut, bool isConsole, const std::wstring& text)
 {
+    DWORD written {};
     if (isConsole) {
-        DWORD written;
         WriteConsoleW(hStdOut, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
     }
     else {
@@ -224,7 +224,6 @@ static void WriteWideLine(HANDLE hStdOut, bool isConsole, const std::wstring& te
         WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
                              &utf8[0], utf8Len, nullptr, nullptr);
 
-        DWORD written;
         WriteFile(hStdOut, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
     }
 }
@@ -379,13 +378,13 @@ static const char* GetAttributeTypeName(uint32_t type)
 static bool ApplyFixup(std::string& recordBuf, const MFT_RECORD_HEADER& header)
 {
     const size_t sectorSize = 512;
-    uint8_t* buf = reinterpret_cast<uint8_t*>(&recordBuf[0]);
+    auto* buf = reinterpret_cast<uint8_t*>(&recordBuf[0]);
 
     if (header.updateSeqOffset + 2u > recordBuf.size() || header.updateSeqSize == 0) {
         return false;
     }
 
-    const uint16_t* usa = reinterpret_cast<const uint16_t*>(buf + header.updateSeqOffset);
+    const auto* usa = reinterpret_cast<const uint16_t*>(buf + header.updateSeqOffset);
     uint16_t checkValue = usa[0];
     uint32_t sectorCount = static_cast<uint32_t>(header.updateSeqSize) - 1;
 
@@ -396,7 +395,7 @@ static bool ApplyFixup(std::string& recordBuf, const MFT_RECORD_HEADER& header)
             break;
         }
 
-        uint16_t* sectorTail = reinterpret_cast<uint16_t*>(buf + sectorEndOffset);
+        auto* sectorTail = reinterpret_cast<uint16_t*>(buf + sectorEndOffset);
         if (*sectorTail != checkValue) {
             allMatched = false; // sector's on-disk tail didn't match - torn write or bad offset
         }
@@ -420,8 +419,7 @@ static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER
 
     size_t offset = header.firstAttributeOffset;
     while (offset + sizeof(ATTR_HEADER_COMMON) <= recordBuf.size()) {
-        const ATTR_HEADER_COMMON* attr =
-            reinterpret_cast<const ATTR_HEADER_COMMON*>(recordBuf.data() + offset);
+        const auto* attr = reinterpret_cast<const ATTR_HEADER_COMMON*>(recordBuf.data() + offset);
 
         if (attr->type == ATTR_TYPE_END) {
             break;
@@ -456,14 +454,14 @@ static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER
                 // cast above: attr->length said this fits, but a
                 // corrupt/torn record shouldn't be trusted blindly.
                 if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_RESIDENT_HEADER) <= recordBuf.size()) {
-                    const ATTR_RESIDENT_HEADER* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
+                    const auto* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
                         recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
                     printf("    -> %s stream, resident, size = %u bytes\n", streamKind, res->valueLength);
                 }
             }
             else {
                 if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_NONRESIDENT_HEADER) <= recordBuf.size()) {
-                    const ATTR_NONRESIDENT_HEADER* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
+                    const auto* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
                         recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
                     printf("    -> %s stream, non-resident, real size = %llu bytes (allocated = %llu)\n",
                         streamKind,
@@ -494,13 +492,13 @@ static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER
 static void DecodeFileNameAttribute(const uint8_t* fileNameContent, uint32_t& outParentRecordNumber,
     uint16_t& outParentSequenceNumber, uint8_t& outNameType, std::wstring& outName)
 {
-    const ATTR_FILENAME_HEADER* fn = reinterpret_cast<const ATTR_FILENAME_HEADER*>(fileNameContent);
+    const auto* fn = reinterpret_cast<const ATTR_FILENAME_HEADER*>(fileNameContent);
 
     outParentRecordNumber = static_cast<uint32_t>(fn->parentRecordReference & 0x0000FFFFFFFFFFFFULL);
     outParentSequenceNumber = static_cast<uint16_t>((fn->parentRecordReference >> 48) & 0xFFFFULL);
     outNameType = fn->nameType;
 
-    const wchar_t* nameChars = reinterpret_cast<const wchar_t*>(fileNameContent + sizeof(ATTR_FILENAME_HEADER));
+    const auto* nameChars = reinterpret_cast<const wchar_t*>(fileNameContent + sizeof(ATTR_FILENAME_HEADER));
     outName.assign(nameChars, fn->nameLength);
 }
 
@@ -538,8 +536,7 @@ static bool ExtractRecordInfo(const std::string& recordBuf, const MFT_RECORD_HEA
 
     size_t offset = header.firstAttributeOffset;
     while (offset + sizeof(ATTR_HEADER_COMMON) <= recordBuf.size()) {
-        const ATTR_HEADER_COMMON* attr =
-            reinterpret_cast<const ATTR_HEADER_COMMON*>(recordBuf.data() + offset);
+        const auto* attr = reinterpret_cast<const ATTR_HEADER_COMMON*>(recordBuf.data() + offset);
 
         if (attr->type == ATTR_TYPE_END) {
             break;
@@ -553,7 +550,7 @@ static bool ExtractRecordInfo(const std::string& recordBuf, const MFT_RECORD_HEA
         }
         else if (attr->type == 0x30 && !attr->nonResident) { // $FILE_NAME, always resident in practice
             if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_RESIDENT_HEADER) <= recordBuf.size()) {
-                const ATTR_RESIDENT_HEADER* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
+                const auto* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
                     recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
                 // valueOffset is documented as measured from the start of
                 // the attribute record itself (i.e. from `offset`), which
@@ -585,14 +582,14 @@ static bool ExtractRecordInfo(const std::string& recordBuf, const MFT_RECORD_HEA
         else if (attr->type == 0x80 && attr->nameLength == 0) { // $DATA, default/unnamed stream only
             if (!attr->nonResident) {
                 if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_RESIDENT_HEADER) <= recordBuf.size()) {
-                    const ATTR_RESIDENT_HEADER* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
+                    const auto* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
                         recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
                     outEntry.fileSize = res->valueLength;
                 }
             }
             else {
                 if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_NONRESIDENT_HEADER) <= recordBuf.size()) {
-                    const ATTR_NONRESIDENT_HEADER* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
+                    const auto* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
                         recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
                     outEntry.fileSize = nonRes->realSize;
                 }
@@ -617,7 +614,7 @@ static uint64_t GetMftFileSize(const std::string& recordBuf, const MFT_RECORD_HE
 {
     size_t offset = header.firstAttributeOffset;
     while (offset + sizeof(ATTR_HEADER_COMMON) <= recordBuf.size()) {
-        const ATTR_HEADER_COMMON* attr =
+        const auto* attr =
             reinterpret_cast<const ATTR_HEADER_COMMON*>(recordBuf.data() + offset);
 
         if (attr->type == ATTR_TYPE_END) {
@@ -629,7 +626,7 @@ static uint64_t GetMftFileSize(const std::string& recordBuf, const MFT_RECORD_HE
 
         if (attr->type == 0x80 && attr->nameLength == 0 && attr->nonResident) {
             if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_NONRESIDENT_HEADER) <= recordBuf.size()) {
-                const ATTR_NONRESIDENT_HEADER* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
+                const auto* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
                     recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
                 return nonRes->realSize;
             }
@@ -676,8 +673,7 @@ static bool FindMftDataAttribute(const std::string& recordBuf, const MFT_RECORD_
 {
     size_t offset = header.firstAttributeOffset;
     while (offset + sizeof(ATTR_HEADER_COMMON) <= recordBuf.size()) {
-        const ATTR_HEADER_COMMON* attr =
-            reinterpret_cast<const ATTR_HEADER_COMMON*>(recordBuf.data() + offset);
+        const auto* attr = reinterpret_cast<const ATTR_HEADER_COMMON*>(recordBuf.data() + offset);
 
         if (attr->type == ATTR_TYPE_END) {
             break;
@@ -688,7 +684,7 @@ static bool FindMftDataAttribute(const std::string& recordBuf, const MFT_RECORD_
 
         if (attr->type == 0x80 && attr->nameLength == 0 && attr->nonResident) {
             if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_NONRESIDENT_HEADER) <= recordBuf.size()) {
-                const ATTR_NONRESIDENT_HEADER* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
+                const auto* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
                     recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
                 outAttrOffset = offset;
                 outAttrLength = attr->length;
@@ -730,7 +726,7 @@ static bool DecodeDataRuns(const std::string& recordBuf, size_t attrOffset, uint
         return false;
     }
 
-    const uint8_t* buf = reinterpret_cast<const uint8_t*>(recordBuf.data());
+    const auto* buf = reinterpret_cast<const uint8_t*>(recordBuf.data());
     size_t offset = runListStart;
     uint64_t runningVcn = 0;
     int64_t  runningLcn = 0;
@@ -787,7 +783,7 @@ static bool DecodeDataRuns(const std::string& recordBuf, size_t attrOffset, uint
             return false; // shouldn't happen for a well-formed $MFT run list
         }
 
-        DataRunExtent extent;
+        DataRunExtent extent {};
         extent.startVcn = runningVcn;
         extent.clusterCount = clusterCount;
         extent.startLcn = static_cast<uint64_t>(runningLcn);
@@ -877,7 +873,7 @@ static bool ResolveRecordOffset(uint64_t recordNumber, uint32_t mftRecordSize, u
 // signal instead of the mismatch being silently discarded. See the
 // "Live-volume consistency" addendum in mft_reader_datarun_design.md.
 // ---------------------------------------------------------------------
-enum class MftRecordReadResult
+enum class MftRecordReadResult   // NOLINT(performance-enum-size)
 {
     Success,        // "FILE" signature - record read and fixed up, ready to use
     IoFailure,      // seek or read itself failed, or the record's VCN wasn't covered by any extent
@@ -908,7 +904,7 @@ static MftRecordReadResult ReadMftRecord(HANDLE hVolume, const std::vector<DataR
         return MftRecordReadResult::IoFailure;
     }
 
-    const MFT_RECORD_HEADER* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
+    const auto* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
 
     if (memcmp(header->signature, "FILE", 4) == 0) {
         outFixupOk = ApplyFixup(recordBuf, *header); // captured, not discarded - see comment above
@@ -919,8 +915,8 @@ static MftRecordReadResult ReadMftRecord(HANDLE hVolume, const std::vector<DataR
     }
 
     bool allZero = true;
-    for (int i = 0; i < 4; ++i) {
-        if (header->signature[i] != 0) {
+    for (int i = 0; i < 4; ++i) {   // NOLINT(modernize-loop-convert)
+        if (header->signature[i] != 0) {  // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
             allZero = false;
             break;
         }
@@ -989,7 +985,7 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
             continue; // leave this slot as default (inUse == false)
         }
 
-        const MFT_RECORD_HEADER* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
+        const auto* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
         if (!(header->flags & 0x0001)) {
             continue; // not in use - stale/deleted record, leave as default
         }
@@ -1054,18 +1050,22 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
             continue; // nothing to show in the progress line
         }
 
+        //  this took 30 seconds to read 1,664,256 MFT records.
+        //  All the rest of this program took less than one second.
         ++decodedCount;
-
         if (decodedCount == 1 || decodedCount % PROGRESS_INTERVAL == 0) {
             // Built with plain concatenation rather than swprintf/wprintf -
             // see WriteWideLine's own comment on wide-stdio formatting
-            // being unreliable across MinGW runtime flavors; string
-            // concatenation sidesteps that class of bug entirely.
-            std::wstring line = L"  [" + std::to_wstring(decodedCount) + L"] " +
-                flatEntries[recordNumber].name + L"\n";
+            // being unreliable across MinGW runtime flavors; 
+            // string concatenation sidesteps that class of bug entirely.
+            // std::wstring line = L"  [" + std::to_wstring(decodedCount) + L"] " +
+            //     flatEntries[recordNumber].name + L"\n";
+            std::wstring line = L"\r[" + std::to_wstring(decodedCount) + L"]";
             WriteWideLine(hStdOut, stdoutIsConsole, line);
         }
     }
+    std::wstring endline = L"\n";
+    WriteWideLine(hStdOut, stdoutIsConsole, endline);
 
     if (extensionRecordCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(extensionRecordCount) +
@@ -1183,10 +1183,10 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
 // an unrelated folder. See the "Live-volume consistency" addendum in
 // mft_reader_datarun_design.md.
 // ---------------------------------------------------------------------
-static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, bool stdoutIsConsole, HANDLE hStdOut)
+static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, bool stdoutIsConsole, HANDLE hStdOut)  // NOLINT(clang-diagnostic-unused-parameter)
 {
     FolderTree tree;
-    const uint32_t totalRecordCount = static_cast<uint32_t>(flatEntries.size());
+    const auto totalRecordCount = static_cast<uint32_t>(flatEntries.size());
 
     // --- Setup: count folders, then allocate + populate folderNodes/folderIndexOf together ---
     uint32_t totalFolderCount = 0;
@@ -1212,7 +1212,7 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
     }
 
     // --- Pass 2: link every populated entry (except the root) to its parent ---
-    uint64_t linkedCount = 0;
+    // uint64_t linkedCount = 0;
     for (uint32_t i = 0; i < totalRecordCount; ++i) {
         if (!flatEntries[i].inUse) {
             continue;
@@ -1261,12 +1261,12 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
             tree.folderNodes[parentSlot].files.push_back(i);
         }
 
-        ++linkedCount;
-        if (linkedCount == 1 || linkedCount % PROGRESS_INTERVAL == 0) {
-            std::wstring line = L"  [link " + std::to_wstring(linkedCount) + L"] " +
-                flatEntries[i].name + L"\n";
-            WriteWideLine(hStdOut, stdoutIsConsole, line);
-        }
+        // ++linkedCount;
+        // if (linkedCount == 1 || linkedCount % PROGRESS_INTERVAL == 0) {
+        //     std::wstring line = L"  [link " + std::to_wstring(linkedCount) + L"] " +
+        //         flatEntries[i].name + L"\n";
+        //     WriteWideLine(hStdOut, stdoutIsConsole, line);
+        // }
     }
 
     return tree;
@@ -1304,14 +1304,16 @@ static const FlatEntry* LookupEntry(const std::vector<FlatEntry>& flatEntries, u
 // a build-time one (see mft_reader_phase3_final.md, "What Step 3
 // deliberately does *not* cover").
 // ---------------------------------------------------------------------
-static void PrintFolderChildren(const FolderNode& folder, const std::vector<FlatEntry>& flatEntries,
+static void PrintFolderChildren(const FolderNode& folder, const std::vector<FlatEntry>& flatEntries,  // NOLINT(clang-diagnostic-unused-function)
     bool stdoutIsConsole, HANDLE hStdOut)
 {
     auto caseInsensitiveLess = [](const std::wstring& a, const std::wstring& b) {
         size_t len = (a.size() < b.size()) ? a.size() : b.size();
         for (size_t i = 0; i < len; ++i) {
-            wchar_t ca = static_cast<wchar_t>(towlower(a[i]));
-            wchar_t cb = static_cast<wchar_t>(towlower(b[i]));
+            // wchar_t ca = static_cast<wchar_t>(towlower(a[i]));
+            // wchar_t cb = static_cast<wchar_t>(towlower(b[i]));
+            auto ca = static_cast<wchar_t>(towlower(a[i]));
+            auto cb = static_cast<wchar_t>(towlower(b[i]));
             if (ca != cb) {
                 return ca < cb;
             }
@@ -1395,7 +1397,7 @@ static char ResolveDriveLetter(int argc, char* argv[])
 static HANDLE OpenVolumeRaw(char driveLetter)
 {
     char volumePath[16];
-    sprintf(volumePath, "\\\\.\\%c:", driveLetter);
+    sprintf(volumePath, "\\\\.\\%c:", driveLetter);   // NOLINT(modernize-raw-string-literal)
 
     HANDLE h = CreateFileA(
         volumePath,
@@ -1452,7 +1454,7 @@ static bool IsProcessElevated()
 }
 
 // ---------------------------------------------------------------------
-int main(int argc, char* argv[])
+int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
 {
     if (argc < 2) {
         PrintUsage(argv[0]);
@@ -1483,7 +1485,7 @@ int main(int argc, char* argv[])
     }
 
     // Read the boot sector (always the first 512 bytes of the volume).
-    NTFS_BOOT_SECTOR boot;
+    NTFS_BOOT_SECTOR boot{};
     DWORD bytesRead = 0;
     if (!ReadFile(hVolume, &boot, sizeof(boot), &bytesRead, nullptr) || bytesRead != sizeof(boot)) {
         printf("Failed to read boot sector.\n");
@@ -1528,7 +1530,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    const MFT_RECORD_HEADER* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
+    // const MFT_RECORD_HEADER* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
+    const auto* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
 
     printf("\n-- MFT record 0 header ($MFT itself) --\n");
     printf("Signature:             %.4s\n", header->signature);
@@ -1572,7 +1575,7 @@ int main(int argc, char* argv[])
     // through the extent map instead.
     size_t dataAttrOffset = 0;
     uint32_t dataAttrLength = 0;
-    ATTR_NONRESIDENT_HEADER mftDataHeader;
+    ATTR_NONRESIDENT_HEADER mftDataHeader {};
     if (!FindMftDataAttribute(recordBuf, *header, dataAttrOffset, dataAttrLength, mftDataHeader)) {
         printf("\nCould not locate $MFT's own non-resident $DATA attribute - cannot decode data runs.\n");
         CloseHandle(hVolume);

@@ -3,6 +3,7 @@
 # should be reviewed once program is completed.
 Checks: |
   bugprone-*,
+  -bugprone-easily-swappable-parameters,
   clang-analyzer-*,
   clang-diagnostic-*,
   cppcoreguidelines-*,
@@ -18,11 +19,3 @@ Checks: |
   -modernize-avoid-c-arrays,
   -modernize-use-trailing-return-type,
   performance-*,
-  -bugprone-exception-escape,
-  -cppcoreguidelines-init-variables,
-  -clang-diagnostic-unused-function,
-  -modernize-use-auto,
-  -bugprone-reserved-identifier,
-  -modernize-raw-string-literal,
-  -cppcoreguidelines-pro-type-member-init,
-  
