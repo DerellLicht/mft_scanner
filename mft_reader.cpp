@@ -1370,45 +1370,6 @@ static void PrintFolderChildren(const FolderNode& folder, const std::vector<Flat
 }
 
 // ---------------------------------------------------------------------
-// Prints command-line usage/help text. Called when no argument is
-// given at all, or when the given argument isn't a recognizable drive
-// spec - see ResolveDriveLetter.
-// ---------------------------------------------------------------------
-static void PrintUsage(const wchar_t* programName)
-{
-    
-    dputsf(L"Usage: %s <drive>:\n", programName);
-    dputsf(L"\n");
-    dputsf(L"Reads the NTFS Master File Table (MFT) directly from the given volume,\n");
-    dputsf(L"bypassing the normal Win32 file enumeration APIs (FindFirstFile/\n");
-    dputsf(L"FindNextFile), in the style of tools like WizTree.\n");
-    dputsf(L"\n");
-    dputsf(L"  <drive>:   Drive letter of the NTFS volume to scan, e.g. D:\n");
-    dputsf(L"\n");
-    dputsf(L"This program must be run from an elevated (Administrator) command\n");
-    dputsf(L"prompt - raw volume access requires elevated privileges.\n");
-}
-
-// ---------------------------------------------------------------------
-// Resolves a drive letter (e.g. 'C') from the required command-line
-// argument. Only handles the simple "X:\..." / "X:" forms, which is
-// sufficient for Phase 1. A drive argument is mandatory - there is no
-// current-working-directory fallback (that was Phase 1's original
-// behavior; removed so that running with no arguments unambiguously
-// means "show usage", not "guess a drive"). Returns '\0' if argv[1]
-// isn't in a recognizable "X:" form - the caller treats that as a
-// usage error, same as no argument at all.
-// ---------------------------------------------------------------------
-static char ResolveDriveLetter(int argc, wchar_t* argv[])
-{
-    if (argc > 1 && argv[1][0] != '\0' && argv[1][1] == ':') {
-        return static_cast<char>(toupper(static_cast<unsigned char>(argv[1][0])));
-    }
-
-    return '\0'; // missing or malformed - caller shows usage
-}
-
-// ---------------------------------------------------------------------
 // Opens a raw handle to the volume containing the given drive letter.
 // Requires the process to be running elevated.
 // ---------------------------------------------------------------------
@@ -1469,6 +1430,44 @@ static bool IsProcessElevated()
 
     CloseHandle(hToken);
     return elevated;
+}
+
+// ---------------------------------------------------------------------
+// Prints command-line usage/help text. Called when no argument is
+// given at all, or when the given argument isn't a recognizable drive
+// spec - see ResolveDriveLetter.
+// ---------------------------------------------------------------------
+static void PrintUsage(const wchar_t* programName)
+{
+    dputsf(L"Usage: %s <drive>:\n", programName);
+    dputsf(L"\n");
+    dputsf(L"Reads the NTFS Master File Table (MFT) directly from the given volume,\n");
+    dputsf(L"bypassing the normal Win32 file enumeration APIs (FindFirstFile/\n");
+    dputsf(L"FindNextFile), in the style of tools like WizTree.\n");
+    dputsf(L"\n");
+    dputsf(L"  <drive>:   Drive letter of the NTFS volume to scan, e.g. D:\n");
+    dputsf(L"\n");
+    dputsf(L"This program must be run from an elevated (Administrator) command\n");
+    dputsf(L"prompt - raw volume access requires elevated privileges.\n");
+}
+
+// ---------------------------------------------------------------------
+// Resolves a drive letter (e.g. 'C') from the required command-line
+// argument. Only handles the simple "X:\..." / "X:" forms, which is
+// sufficient for Phase 1. A drive argument is mandatory - there is no
+// current-working-directory fallback (that was Phase 1's original
+// behavior; removed so that running with no arguments unambiguously
+// means "show usage", not "guess a drive"). Returns '\0' if argv[1]
+// isn't in a recognizable "X:" form - the caller treats that as a
+// usage error, same as no argument at all.
+// ---------------------------------------------------------------------
+static char ResolveDriveLetter(int argc, wchar_t* argv[])
+{
+    if (argc > 1 && argv[1][0] != '\0' && argv[1][1] == ':') {
+        return static_cast<char>(toupper(static_cast<unsigned char>(argv[1][0])));
+    }
+
+    return '\0'; // missing or malformed - caller shows usage
 }
 
 //********************************************************************************
@@ -1747,7 +1746,7 @@ int wmain(int argc, wchar_t *argv[]) // NOLINT(bugprone-exception-escape)
         // PrintFolderChildren itself is left in place (unused) as
         // reference code for later real lookups - see its own comment.
         // dputsf(L"\n-- Root's direct children --\n");
-        // PrintFolderChildren(root, flatEntries);
+        PrintFolderChildren(root, flatEntries);
     }
     else {
         dputsf(L"Warning: root record (%u) was not found as a folder.\n", ROOT_RECORD_NUMBER);
