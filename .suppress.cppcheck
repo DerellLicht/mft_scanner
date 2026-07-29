@@ -1,6 +1,7 @@
-knownConditionTrueFalse:mft_reader.cpp:572
+knownConditionTrueFalse:mft_reader.cpp:590
 knownConditionTrueFalse:mft_reader.cpp:1616
-constParameter:mft_reader.cpp:1384
-unusedFunction:mft_reader.cpp:1307
+constParameter:mft_reader.cpp:1402
+unusedFunction:mft_reader.cpp:1521
 unusedStructMember
 missingIncludeSystem
+useStlAlgorithm

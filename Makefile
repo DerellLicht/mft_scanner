@@ -2,7 +2,7 @@
 # SHELL=cmd.exe
 USE_DEBUG = NO
 USE_64BIT = YES
-USE_UNICODE = NO
+USE_UNICODE = YES
 USE_CLANG = YES
 # use -static for clang/llvm and cygwin/mingw
 USE_STATIC = YES
@@ -40,7 +40,7 @@ CFLAGS := -Wall -Wextra -g -c
 LFLAGS := -g
 else
 CFLAGS := -Wall -Wextra -O3 -c
-LFLAGS := -s -O3
+LFLAGS := -s -O3 -mconsole
 endif
 # CFLAGS += -Weffc++
 ifeq ($(USE_64BIT),YES)

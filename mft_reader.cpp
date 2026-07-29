@@ -49,6 +49,9 @@
 #include <algorithm>
 #include <cwctype>
 
+static bool stdoutIsConsole = true; // default = console
+static HANDLE hStdOut = INVALID_HANDLE_VALUE ;
+
 // ---------------------------------------------------------------------
 // NTFS boot sector (BIOS Parameter Block), exactly 512 bytes on disk.
 // Field layout/offsets are per the documented NTFS on-disk format.
@@ -172,63 +175,6 @@ struct ATTR_NONRESIDENT_HEADER
 #pragma pack(pop)
 
 // ---------------------------------------------------------------------
-// Unicode output infrastructure (for Phase 2 onward, once we're printing
-// real NTFS $FILE_NAME data - which is always stored as UTF-16LE on
-// disk regardless of any UNICODE/_UNICODE macro settings).
-//
-// NTFS filenames need wchar_t/WriteConsoleW, not printf/wprintf: MinGW's
-// older mingw.org-based runtimes (e.g. TDM32) don't correctly implement
-// the CRT's wide-stdio text-mode translation (_O_U16TEXT), and the
-// console code-page route (chcp 65001) has its own long history of
-// truncation/corruption bugs independent of toolchain. WriteConsoleW
-// talks directly to the console subsystem in native UTF-16, bypassing
-// all of that CRT/code-page machinery.
-//
-// The catch: WriteConsoleW only works when stdout is an actual console
-// object. If output is redirected to a file/pipe, WriteConsoleW returns
-// FALSE and silently writes nothing - no error, filenames just vanish
-// while everything else (plain printf output) keeps working fine. The
-// pair of functions below detects that up front and falls back to
-// UTF-8 + WriteFile for the redirected case, which is also the right
-// encoding choice for a redirected .txt destination.
-//
-// Moved above the Phase 3 functions (Step 1/3) since they're the first
-// callers of WriteWideLine, for progress-line output - originally this
-// block lived just above main(), which is fine when nothing upstream of
-// main() calls it, but Phase 3's helper functions now do.
-// ---------------------------------------------------------------------
-
-// Call once at startup with GetStdHandle(STD_OUTPUT_HANDLE). Returns
-// true if stdout is a live console (WriteConsoleW is safe to use),
-// false if it has been redirected to a file/pipe (fall back to UTF-8 +
-// WriteFile instead - see WriteWideLine).
-static bool StdoutIsConsole(HANDLE hStdOut)
-{
-    DWORD mode {};
-    return GetConsoleMode(hStdOut, &mode) != 0;
-}
-
-// Writes a wide string to stdout correctly whether it's a live console
-// or has been redirected. isConsole should come from a single cached
-// StdoutIsConsole() call at startup, not re-checked per line.
-static void WriteWideLine(HANDLE hStdOut, bool isConsole, const std::wstring& text)
-{
-    DWORD written {};
-    if (isConsole) {
-        WriteConsoleW(hStdOut, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
-    }
-    else {
-        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
-                                           nullptr, 0, nullptr, nullptr);
-        std::string utf8(utf8Len, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
-                             &utf8[0], utf8Len, nullptr, nullptr);
-
-        WriteFile(hStdOut, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
-    }
-}
-
-// ---------------------------------------------------------------------
 // Follows ATTR_HEADER_COMMON + ATTR_RESIDENT_HEADER for a $FILE_NAME
 // (type 0x30) attribute - these are always resident in practice. Holds
 // the parent directory reference and namespace tag needed by Phase 3's
@@ -337,29 +283,101 @@ struct FolderTree
 };
 
 // ---------------------------------------------------------------------
+// Unicode output infrastructure (for Phase 2 onward, once we're printing
+// real NTFS $FILE_NAME data - which is always stored as UTF-16LE on
+// disk regardless of any UNICODE/_UNICODE macro settings).
+//
+// NTFS filenames need wchar_t/WriteConsoleW, not printf/wprintf: MinGW's
+// older mingw.org-based runtimes (e.g. TDM32) don't correctly implement
+// the CRT's wide-stdio text-mode translation (_O_U16TEXT), and the
+// console code-page route (chcp 65001) has its own long history of
+// truncation/corruption bugs independent of toolchain. WriteConsoleW
+// talks directly to the console subsystem in native UTF-16, bypassing
+// all of that CRT/code-page machinery.
+//
+// The catch: WriteConsoleW only works when stdout is an actual console
+// object. If output is redirected to a file/pipe, WriteConsoleW returns
+// FALSE and silently writes nothing - no error, filenames just vanish
+// while everything else (plain printf output) keeps working fine. The
+// pair of functions below detects that up front and falls back to
+// UTF-8 + WriteFile for the redirected case, which is also the right
+// encoding choice for a redirected .txt destination.
+//
+// Moved above the Phase 3 functions (Step 1/3) since they're the first
+// callers of WriteWideLine, for progress-line output - originally this
+// block lived just above main(), which is fine when nothing upstream of
+// main() calls it, but Phase 3's helper functions now do.
+// ---------------------------------------------------------------------
+
+// Call once at startup with GetStdHandle(STD_OUTPUT_HANDLE). Returns
+// true if stdout is a live console (WriteConsoleW is safe to use),
+// false if it has been redirected to a file/pipe (fall back to UTF-8 +
+// WriteFile instead - see WriteWideLine).
+static bool IsStdoutConsole(HANDLE hStdOutHdl)
+{
+    DWORD mode {};
+    return GetConsoleMode(hStdOutHdl, &mode) != 0;
+}
+
+// Writes a wide string to stdout correctly whether it's a live console
+// or has been redirected. isConsole should come from a single cached
+// StdoutIsConsole() call at startup, not re-checked per line.
+static void WriteWideLine(const std::wstring& text)
+{
+    DWORD written {};
+    if (stdoutIsConsole) {
+        WriteConsoleW(hStdOut, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
+    }
+    else {
+        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                                           nullptr, 0, nullptr, nullptr);
+        std::string utf8(utf8Len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                             &utf8[0], utf8Len, nullptr, nullptr);
+
+        WriteFile(hStdOut, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+    }
+}
+
+//********************************************************************
+int dputsf(const wchar_t *fmt, ...)
+{
+   wchar_t consoleBuffer[3000] ;
+   va_list al {};
+
+   va_start(al, fmt);
+   _vswprintf(consoleBuffer, fmt, al);   //lint !e64
+   // OutputDebugString(consoleBuffer) ;
+   std::wstring wwl = consoleBuffer ;
+   WriteWideLine(wwl) ;
+   va_end(al);
+   return 1;
+}
+
+// ---------------------------------------------------------------------
 // Human-readable names for the standard NTFS attribute type codes.
 // Returns "unknown" for anything not in this table rather than failing -
 // third-party/rare attribute types shouldn't stop the walk.
 // ---------------------------------------------------------------------
-static const char* GetAttributeTypeName(uint32_t type)
+static const wchar_t* GetAttributeTypeName(uint32_t type)
 {
     switch (type) {
-        case 0x10:  return "$STANDARD_INFORMATION";
-        case 0x20:  return "$ATTRIBUTE_LIST";
-        case 0x30:  return "$FILE_NAME";
-        case 0x40:  return "$OBJECT_ID";
-        case 0x50:  return "$SECURITY_DESCRIPTOR";
-        case 0x60:  return "$VOLUME_NAME";
-        case 0x70:  return "$VOLUME_INFORMATION";
-        case 0x80:  return "$DATA";
-        case 0x90:  return "$INDEX_ROOT";
-        case 0xA0:  return "$INDEX_ALLOCATION";
-        case 0xB0:  return "$BITMAP";
-        case 0xC0:  return "$REPARSE_POINT";
-        case 0xD0:  return "$EA_INFORMATION";
-        case 0xE0:  return "$EA";
-        case 0x100: return "$LOGGED_UTILITY_STREAM";
-        default:    return "unknown";
+        case 0x10:  return L"$STANDARD_INFORMATION";
+        case 0x20:  return L"$ATTRIBUTE_LIST";
+        case 0x30:  return L"$FILE_NAME";
+        case 0x40:  return L"$OBJECT_ID";
+        case 0x50:  return L"$SECURITY_DESCRIPTOR";
+        case 0x60:  return L"$VOLUME_NAME";
+        case 0x70:  return L"$VOLUME_INFORMATION";
+        case 0x80:  return L"$DATA";
+        case 0x90:  return L"$INDEX_ROOT";
+        case 0xA0:  return L"$INDEX_ALLOCATION";
+        case 0xB0:  return L"$BITMAP";
+        case 0xC0:  return L"$REPARSE_POINT";
+        case 0xD0:  return L"$EA_INFORMATION";
+        case 0xE0:  return L"$EA";
+        case 0x100: return L"$LOGGED_UTILITY_STREAM";
+        default:    return L"unknown";
     }
 }
 
@@ -415,7 +433,7 @@ static bool ApplyFixup(std::string& recordBuf, const MFT_RECORD_HEADER& header)
 // ---------------------------------------------------------------------
 static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER& header)
 {
-    printf("\n-- Attributes --\n");
+    dputsf(L"\n-- Attributes --\n");
 
     size_t offset = header.firstAttributeOffset;
     while (offset + sizeof(ATTR_HEADER_COMMON) <= recordBuf.size()) {
@@ -426,16 +444,16 @@ static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER
         }
 
         if (attr->length < sizeof(ATTR_HEADER_COMMON) || offset + attr->length > recordBuf.size()) {
-            printf("  [malformed attribute at offset %zu - length %u, stopping walk]\n",
+            dputsf(L"  [malformed attribute at offset %zu - length %u, stopping walk]\n",
                 offset, attr->length);
             break;
         }
 
-        printf("  type 0x%02X (%-22s) length %4u  %-12s  id %u\n",
+        dputsf(L"  type 0x%02X (%-22s) length %4u  %-12s  id %u\n",
             attr->type,
             GetAttributeTypeName(attr->type),
             attr->length,
-            attr->nonResident ? "non-resident" : "resident",
+            attr->nonResident ? L"non-resident" : L"resident",
             attr->attributeId);
 
         // $DATA size reporting only - data runs are intentionally not
@@ -447,7 +465,7 @@ static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER
         // 0x80 entries alongside the unnamed/default stream, so both
         // are reported here rather than assuming only one exists.
         if (attr->type == 0x80 && offset + attr->length <= recordBuf.size()) {
-            const char* streamKind = (attr->nameLength == 0) ? "default" : "named";
+            const wchar_t* streamKind = (attr->nameLength == 0) ? L"default" : L"named" ;
 
             if (!attr->nonResident) {
                 // Bounds-checked the same way as the ATTR_HEADER_COMMON
@@ -456,14 +474,14 @@ static void WalkAttributes(const std::string& recordBuf, const MFT_RECORD_HEADER
                 if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_RESIDENT_HEADER) <= recordBuf.size()) {
                     const auto* res = reinterpret_cast<const ATTR_RESIDENT_HEADER*>(
                         recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
-                    printf("    -> %s stream, resident, size = %u bytes\n", streamKind, res->valueLength);
+                    dputsf(L"    -> %s stream, resident, size = %u bytes\n", streamKind, res->valueLength);
                 }
             }
             else {
                 if (offset + sizeof(ATTR_HEADER_COMMON) + sizeof(ATTR_NONRESIDENT_HEADER) <= recordBuf.size()) {
                     const auto* nonRes = reinterpret_cast<const ATTR_NONRESIDENT_HEADER*>(
                         recordBuf.data() + offset + sizeof(ATTR_HEADER_COMMON));
-                    printf("    -> %s stream, non-resident, real size = %llu bytes (allocated = %llu)\n",
+                    dputsf(L"    -> %s stream, non-resident, real size = %llu bytes (allocated = %llu)\n",
                         streamKind,
                         static_cast<unsigned long long>(nonRes->realSize),
                         static_cast<unsigned long long>(nonRes->allocatedSize));
@@ -942,7 +960,7 @@ static MftRecordReadResult ReadMftRecord(HANDLE hVolume, const std::vector<DataR
 // potentially multi-million-record MFT.
 // ---------------------------------------------------------------------
 static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vector<DataRunExtent>& mftExtents,
-    uint32_t clusterSize, uint32_t mftRecordSize, uint64_t totalRecordCount, bool stdoutIsConsole, HANDLE hStdOut,
+    uint32_t clusterSize, uint32_t mftRecordSize, uint64_t totalRecordCount,
     std::vector<uint32_t>& outUnresolvedBaseRecordNumbers)
 {
     std::vector<FlatEntry> flatEntries(totalRecordCount);
@@ -1061,21 +1079,21 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
             // std::wstring line = L"  [" + std::to_wstring(decodedCount) + L"] " +
             //     flatEntries[recordNumber].name + L"\n";
             std::wstring line = L"\r[" + std::to_wstring(decodedCount) + L"]";
-            WriteWideLine(hStdOut, stdoutIsConsole, line);
+            WriteWideLine(line);
         }
     }
     std::wstring endline = L"\n";
-    WriteWideLine(hStdOut, stdoutIsConsole, endline);
+    WriteWideLine(endline);
 
     if (extensionRecordCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(extensionRecordCount) +
             L" extension record(s) - overflow attribute storage, no $FILE_NAME expected)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
     if (unresolvedBaseRecordCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(unresolvedBaseRecordCount) +
             L" base record(s) in use with NO $FILE_NAME found - unexpected, worth a closer look)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
 
         // Fixup-mismatch overlap: a high fraction here supports "torn
         // read from live-volume churn during the scan" as the cause; a
@@ -1085,7 +1103,7 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
         std::wstring fixupLine = L"    of those, " + std::to_wstring(unresolvedBaseRecordFixupMismatchCount) +
             L" of " + std::to_wstring(unresolvedBaseRecordCount) +
             L" also had a fixup (update-sequence) checksum mismatch\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, fixupLine);
+        WriteWideLine(fixupLine);
 
         // $ATTRIBUTE_LIST overlap: a high fraction here supports "this
         // record's own $FILE_NAME was relocated to an extension record
@@ -1096,7 +1114,7 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
         std::wstring attrListLine = L"    of those, " + std::to_wstring(unresolvedBaseRecordAttributeListCount) +
             L" of " + std::to_wstring(unresolvedBaseRecordCount) +
             L" have an $ATTRIBUTE_LIST attribute (possible relocated $FILE_NAME)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, attrListLine);
+        WriteWideLine(attrListLine);
 
         // Per-record-number listing retired - the fixup and $ATTRIBUTE_LIST
         // overlap ratios above now explain this bucket (heavy hard-linking
@@ -1114,34 +1132,34 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
         //     recordListLine += std::to_wstring(outUnresolvedBaseRecordNumbers[i]);
         // }
         // recordListLine += L"\n";
-        // WriteWideLine(hStdOut, stdoutIsConsole, recordListLine);
+        // WriteWideLine(recordListLine);
     }
     if (fixupMismatchCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(fixupMismatchCount) +
             L" record(s) overall had a fixup checksum mismatch - a torn/mid-write read, not "
             L"necessarily fatal to that record's own data)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
     if (ioFailureCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(ioFailureCount) + L" record(s) - seek/read I/O failure)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
     if (freeSlotCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(freeSlotCount) +
             L" record(s) - free/never-used MFT slot (all-zero signature), normal)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
     if (corruptRecordCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(corruptRecordCount) +
             L" record(s) - NTFS self-flagged corrupt (\"BAAD\" signature), normal)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
     if (unexpectedDataCount > 0) {
         std::wstring line = L"  (" + std::to_wstring(unexpectedDataCount) +
             L" record(s) - UNRECOGNIZED signature (not \"FILE\"/\"BAAD\"/zero); first at record " +
             std::to_wstring(firstUnexpectedDataRecord) +
             L" - likely reading past the $MFT's first extent; data-run decoding not yet implemented)\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
 
     return flatEntries;
@@ -1183,7 +1201,7 @@ static std::vector<FlatEntry> BuildFlatEntryList(HANDLE hVolume, const std::vect
 // an unrelated folder. See the "Live-volume consistency" addendum in
 // mft_reader_datarun_design.md.
 // ---------------------------------------------------------------------
-static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, bool stdoutIsConsole, HANDLE hStdOut)  // NOLINT(clang-diagnostic-unused-parameter)
+static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries)
 {
     FolderTree tree;
     const auto totalRecordCount = static_cast<uint32_t>(flatEntries.size());
@@ -1265,7 +1283,7 @@ static FolderTree BuildFolderTree(const std::vector<FlatEntry>& flatEntries, boo
         // if (linkedCount == 1 || linkedCount % PROGRESS_INTERVAL == 0) {
         //     std::wstring line = L"  [link " + std::to_wstring(linkedCount) + L"] " +
         //         flatEntries[i].name + L"\n";
-        //     WriteWideLine(hStdOut, stdoutIsConsole, line);
+        //     WriteWideLine(line);
         // }
     }
 
@@ -1304,8 +1322,7 @@ static const FlatEntry* LookupEntry(const std::vector<FlatEntry>& flatEntries, u
 // a build-time one (see mft_reader_phase3_final.md, "What Step 3
 // deliberately does *not* cover").
 // ---------------------------------------------------------------------
-static void PrintFolderChildren(const FolderNode& folder, const std::vector<FlatEntry>& flatEntries,  // NOLINT(clang-diagnostic-unused-function)
-    bool stdoutIsConsole, HANDLE hStdOut)
+static void PrintFolderChildren(const FolderNode& folder, const std::vector<FlatEntry>& flatEntries)  // NOLINT(clang-diagnostic-unused-function)
 {
     auto caseInsensitiveLess = [](const std::wstring& a, const std::wstring& b) {
         size_t len = (a.size() < b.size()) ? a.size() : b.size();
@@ -1339,7 +1356,7 @@ static void PrintFolderChildren(const FolderNode& folder, const std::vector<Flat
             continue; // shouldn't happen - record number came from this same flatEntries vector
         }
         std::wstring line = L"  [DIR]  " + entry->name + L"  (record " + std::to_wstring(recordNumber) + L")\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
     for (uint32_t recordNumber : sortedFiles) {
         const FlatEntry* entry = LookupEntry(flatEntries, recordNumber);
@@ -1348,7 +1365,7 @@ static void PrintFolderChildren(const FolderNode& folder, const std::vector<Flat
         }
         std::wstring line = L"  " + std::to_wstring(entry->fileSize) + L"  " + entry->name +
             L"  (record " + std::to_wstring(recordNumber) + L")\n";
-        WriteWideLine(hStdOut, stdoutIsConsole, line);
+        WriteWideLine(line);
     }
 }
 
@@ -1357,18 +1374,19 @@ static void PrintFolderChildren(const FolderNode& folder, const std::vector<Flat
 // given at all, or when the given argument isn't a recognizable drive
 // spec - see ResolveDriveLetter.
 // ---------------------------------------------------------------------
-static void PrintUsage(const char* programName)
+static void PrintUsage(const wchar_t* programName)
 {
-    printf("Usage: %s <drive>:\n", programName);
-    printf("\n");
-    printf("Reads the NTFS Master File Table (MFT) directly from the given volume,\n");
-    printf("bypassing the normal Win32 file enumeration APIs (FindFirstFile/\n");
-    printf("FindNextFile), in the style of tools like WizTree.\n");
-    printf("\n");
-    printf("  <drive>:   Drive letter of the NTFS volume to scan, e.g. D:\n");
-    printf("\n");
-    printf("This program must be run from an elevated (Administrator) command\n");
-    printf("prompt - raw volume access requires elevated privileges.\n");
+    
+    dputsf(L"Usage: %s <drive>:\n", programName);
+    dputsf(L"\n");
+    dputsf(L"Reads the NTFS Master File Table (MFT) directly from the given volume,\n");
+    dputsf(L"bypassing the normal Win32 file enumeration APIs (FindFirstFile/\n");
+    dputsf(L"FindNextFile), in the style of tools like WizTree.\n");
+    dputsf(L"\n");
+    dputsf(L"  <drive>:   Drive letter of the NTFS volume to scan, e.g. D:\n");
+    dputsf(L"\n");
+    dputsf(L"This program must be run from an elevated (Administrator) command\n");
+    dputsf(L"prompt - raw volume access requires elevated privileges.\n");
 }
 
 // ---------------------------------------------------------------------
@@ -1381,7 +1399,7 @@ static void PrintUsage(const char* programName)
 // isn't in a recognizable "X:" form - the caller treats that as a
 // usage error, same as no argument at all.
 // ---------------------------------------------------------------------
-static char ResolveDriveLetter(int argc, char* argv[])
+static char ResolveDriveLetter(int argc, wchar_t* argv[])
 {
     if (argc > 1 && argv[1][0] != '\0' && argv[1][1] == ':') {
         return static_cast<char>(toupper(static_cast<unsigned char>(argv[1][0])));
@@ -1453,9 +1471,59 @@ static bool IsProcessElevated()
     return elevated;
 }
 
-// ---------------------------------------------------------------------
-int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
+//********************************************************************************
+//  this solution is from:
+//  https://github.com/coderforlife/mingw-unicode-main/
+//********************************************************************************
+#ifndef  USE_SO_METHOD
+#if defined(__GNUC__) && defined(_UNICODE)
+
+#ifndef __MSVCRT__
+#error Unicode main function requires linking to MSVCRT
+#endif
+
+#include <wchar.h>
+#include <stdlib.h>
+
+extern int _CRT_glob;
+extern 
+#ifdef __cplusplus
+"C" 
+#endif
+void __wgetmainargs(int*,wchar_t***,wchar_t***,int,int*);   // NOLINT
+
+#ifdef MAIN_USE_ENVP
+int wmain(int argc, wchar_t *argv[], wchar_t *envp[]);
+#else
+int wmain(int argc, wchar_t *argv[]);
+#endif
+
+int main() 
 {
+   wchar_t **enpv, **argv;
+   int argc, si = 0;
+   __wgetmainargs(&argc, &argv, &enpv, _CRT_glob, &si); // this also creates the global variable __wargv
+#ifdef MAIN_USE_ENVP
+   return wmain(argc, argv, enpv);
+#else
+   return wmain(argc, argv);
+#endif
+}
+
+#endif //defined(__GNUC__) && defined(_UNICODE)
+#endif   // #ifndef  USE_SO_METHOD
+
+// ---------------------------------------------------------------------
+#ifdef  USE_SO_METHOD
+int main(void) 
+#else
+// int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
+int wmain(int argc, wchar_t *argv[]) // NOLINT(bugprone-exception-escape)
+#endif
+{
+    stdoutIsConsole = IsStdoutConsole(GetStdHandle(STD_OUTPUT_HANDLE));
+    hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    
     if (argc < 2) {
         PrintUsage(argv[0]);
         return 1;
@@ -1463,24 +1531,24 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
 
     char driveLetter = ResolveDriveLetter(argc, argv);
     if (driveLetter == '\0') {
-        printf("Invalid drive argument: '%s'\n\n", argv[1]);
+        dputsf(L"Invalid drive argument: '%s'\n\n", argv[1]);
         PrintUsage(argv[0]);
         return 1;
     }
 
     if (!IsProcessElevated()) {
-        printf("This program requires Administrator privileges to read raw NTFS volumes.\n");
-        printf("Please re-run from an elevated (Administrator) Command Prompt.\n");
+        dputsf(L"This program requires Administrator privileges to read raw NTFS volumes.\n");
+        dputsf(L"Please re-run from an elevated (Administrator) Command Prompt.\n");
         return 1;
     }
 
-    printf("Target volume: %c:\n", driveLetter);
+    dputsf(L"Target volume: %c:\n", driveLetter);
 
     HANDLE hVolume = OpenVolumeRaw(driveLetter);
     if (hVolume == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        printf("Failed to open volume (error %lu).\n", static_cast<unsigned long>(err));
-        printf("This program must be run as Administrator.\n");
+        dputsf(L"Failed to open volume (error %lu).\n", static_cast<unsigned long>(err));
+        dputsf(L"This program must be run as Administrator.\n");
         return 1;
     }
 
@@ -1488,13 +1556,13 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     NTFS_BOOT_SECTOR boot{};
     DWORD bytesRead = 0;
     if (!ReadFile(hVolume, &boot, sizeof(boot), &bytesRead, nullptr) || bytesRead != sizeof(boot)) {
-        printf("Failed to read boot sector.\n");
+        dputsf(L"Failed to read boot sector.\n");
         CloseHandle(hVolume);
         return 1;
     }
 
     if (memcmp(boot.oemId, "NTFS    ", 8) != 0) {
-        printf("Volume %c: does not appear to be NTFS.\n", driveLetter);
+        dputsf(L"Volume %c: does not appear to be NTFS.\n", driveLetter);
         CloseHandle(hVolume);
         return 1;
     }
@@ -1503,29 +1571,29 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     uint32_t mftRecordSize = ComputeMftRecordSize(boot);
     uint64_t mftOffsetBytes = boot.mftStartCluster * clusterSize;
 
-    printf("\n-- NTFS boot sector --\n");
-    printf("Bytes per sector:      %u\n", boot.bytesPerSector);
-    printf("Sectors per cluster:   %u\n", boot.sectorsPerCluster);
-    printf("Cluster size:          %u bytes\n", clusterSize);
-    printf("Total sectors:         %llu\n", static_cast<unsigned long long>(boot.totalSectors));
-    printf("MFT start cluster:     %llu\n", static_cast<unsigned long long>(boot.mftStartCluster));
-    printf("MFT byte offset:       %llu\n", static_cast<unsigned long long>(mftOffsetBytes));
-    printf("MFT record size:       %u bytes\n", mftRecordSize);
-    printf("Volume serial number:  0x%llX\n", static_cast<unsigned long long>(boot.volumeSerialNumber));
+    dputsf(L"\n-- NTFS boot sector --\n");
+    dputsf(L"Bytes per sector:      %u\n", boot.bytesPerSector);
+    dputsf(L"Sectors per cluster:   %u\n", boot.sectorsPerCluster);
+    dputsf(L"Cluster size:          %u bytes\n", clusterSize);
+    dputsf(L"Total sectors:         %llu\n", static_cast<unsigned long long>(boot.totalSectors));
+    dputsf(L"MFT start cluster:     %llu\n", static_cast<unsigned long long>(boot.mftStartCluster));
+    dputsf(L"MFT byte offset:       %llu\n", static_cast<unsigned long long>(mftOffsetBytes));
+    dputsf(L"MFT record size:       %u bytes\n", mftRecordSize);
+    dputsf(L"Volume serial number:  0x%llX\n", static_cast<unsigned long long>(boot.volumeSerialNumber));
 
     // Seek to the start of the MFT and read its very first record (record 0,
     // which describes the $MFT file itself).
     LARGE_INTEGER seekPos;
     seekPos.QuadPart = static_cast<LONGLONG>(mftOffsetBytes);
     if (!SetFilePointerEx(hVolume, seekPos, nullptr, FILE_BEGIN)) {
-        printf("Failed to seek to MFT.\n");
+        dputsf(L"Failed to seek to MFT.\n");
         CloseHandle(hVolume);
         return 1;
     }
 
     std::string recordBuf(mftRecordSize, '\0');
     if (!ReadFile(hVolume, &recordBuf[0], mftRecordSize, &bytesRead, nullptr) || bytesRead != mftRecordSize) {
-        printf("Failed to read MFT record 0.\n");
+        dputsf(L"Failed to read MFT record 0.\n");
         CloseHandle(hVolume);
         return 1;
     }
@@ -1533,19 +1601,25 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     // const MFT_RECORD_HEADER* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
     const auto* header = reinterpret_cast<const MFT_RECORD_HEADER*>(recordBuf.data());
 
-    printf("\n-- MFT record 0 header ($MFT itself) --\n");
-    printf("Signature:             %.4s\n", header->signature);
-    printf("Sequence number:       %u\n", header->sequenceNumber);
-    printf("Hard link count:       %u\n", header->hardLinkCount);
-    printf("First attribute offset:%u\n", header->firstAttributeOffset);
-    printf("Flags:                 0x%04X (%s)\n",
+    dputsf(L"\n-- MFT record 0 header ($MFT itself) --\n");
+    //  convert header signature from uint8_t array to wchar_t array
+    wchar_t wsig[5];
+    //std::copy(&header->signature[0], &header->signature[4], wsig);
+    for (int i = 0; i < 4; ++i)
+        wsig[i] = static_cast<wchar_t>(header->signature[i]);
+    wsig[4] = L'\0';
+    dputsf(L"Signature:             %s\n", wsig);
+    dputsf(L"Sequence number:       %u\n", header->sequenceNumber);
+    dputsf(L"Hard link count:       %u\n", header->hardLinkCount);
+    dputsf(L"First attribute offset:%u\n", header->firstAttributeOffset);
+    dputsf(L"Flags:                 0x%04X (%s)\n",
         header->flags,
-        (header->flags & 0x0001) ? "in use" : "not in use");
-    printf("Real size:             %u bytes\n", header->realSize);
-    printf("Allocated size:        %u bytes\n", header->allocatedSize);
+        (header->flags & 0x0001) ? L"in use" : L"not in use");
+    dputsf(L"Real size:             %u bytes\n", header->realSize);
+    dputsf(L"Allocated size:        %u bytes\n", header->allocatedSize);
 
     if (memcmp(header->signature, "FILE", 4) != 0) {
-        printf("\nUnexpected signature - record may be corrupt or offsets are wrong.\n");
+        dputsf(L"\nUnexpected signature - record may be corrupt or offsets are wrong.\n");
         CloseHandle(hVolume);
         return 1;
     }
@@ -1556,12 +1630,12 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     // fields themselves, but recordBuf's storage didn't move, so the
     // existing `header` pointer stays valid either way).
     if (!ApplyFixup(recordBuf, *header)) {
-        printf("\nWarning: update sequence check value mismatch - record may be corrupt.\n");
+        dputsf(L"\nWarning: update sequence check value mismatch - record may be corrupt.\n");
     }
 
     WalkAttributes(recordBuf, *header);
 
-    printf("\nPhase 1 OK: raw MFT read pipeline confirmed working.\n");
+    dputsf(L"\nPhase 1 OK: raw MFT read pipeline confirmed working.\n");
 
     // --- Data-run decode validation (intermediate step) ---
     // See mft_reader_datarun_design.md. Decodes record 0's own $DATA
@@ -1577,7 +1651,7 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     uint32_t dataAttrLength = 0;
     ATTR_NONRESIDENT_HEADER mftDataHeader {};
     if (!FindMftDataAttribute(recordBuf, *header, dataAttrOffset, dataAttrLength, mftDataHeader)) {
-        printf("\nCould not locate $MFT's own non-resident $DATA attribute - cannot decode data runs.\n");
+        dputsf(L"\nCould not locate $MFT's own non-resident $DATA attribute - cannot decode data runs.\n");
         CloseHandle(hVolume);
         return 1;
     }
@@ -1585,9 +1659,9 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     std::vector<DataRunExtent> mftExtents;
     bool runsDecodedOk = DecodeDataRuns(recordBuf, dataAttrOffset, dataAttrLength, mftDataHeader, mftExtents);
 
-    printf("\n-- $MFT data-run decode (validation only) --\n");
+    dputsf(L"\n-- $MFT data-run decode (validation only) --\n");
     if (!runsDecodedOk) {
-        printf("Data-run decode FAILED (malformed run list or unsupported sparse run).\n");
+        dputsf(L"Data-run decode FAILED (malformed run list or unsupported sparse run).\n");
         CloseHandle(hVolume);
         return 1;
     }
@@ -1599,32 +1673,32 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     uint64_t coveredBytes = totalCoveredClusters * clusterSize;
     bool sizesMatch = (coveredBytes == mftDataHeader.allocatedSize);
 
-    printf("Extents decoded:        %zu\n", mftExtents.size());
-    printf("Total covered clusters: %llu\n", static_cast<unsigned long long>(totalCoveredClusters));
-    printf("Covered bytes:          %llu\n", static_cast<unsigned long long>(coveredBytes));
-    printf("$DATA allocatedSize:    %llu\n", static_cast<unsigned long long>(mftDataHeader.allocatedSize));
-    printf("Match:                   %s\n", sizesMatch ? "YES" : "NO - MISMATCH");
+    dputsf(L"Extents decoded:        %zu\n", mftExtents.size());
+    dputsf(L"Total covered clusters: %llu\n", static_cast<unsigned long long>(totalCoveredClusters));
+    dputsf(L"Covered bytes:          %llu\n", static_cast<unsigned long long>(coveredBytes));
+    dputsf(L"$DATA allocatedSize:    %llu\n", static_cast<unsigned long long>(mftDataHeader.allocatedSize));
+    dputsf(L"Match:                   %s\n", sizesMatch ? L"YES" : L"NO - MISMATCH");
 
     size_t showCount = mftExtents.size() < 10 ? mftExtents.size() : 10;
-    printf("\nFirst %zu extent(s):\n", showCount);
+    dputsf(L"\nFirst %zu extent(s):\n", showCount);
     for (size_t i = 0; i < showCount; ++i) {
-        printf("  [%zu] VCN %llu, %llu cluster(s), LCN %llu\n", i,
+        dputsf(L"  [%zu] VCN %llu, %llu cluster(s), LCN %llu\n", i,
             static_cast<unsigned long long>(mftExtents[i].startVcn),
             static_cast<unsigned long long>(mftExtents[i].clusterCount),
             static_cast<unsigned long long>(mftExtents[i].startLcn));
     }
     if (mftExtents.size() > showCount) {
         const DataRunExtent& last = mftExtents.back();
-        printf("  ... (%zu more) ...\n", mftExtents.size() - showCount - 1);
-        printf("  [last] VCN %llu, %llu cluster(s), LCN %llu\n",
+        dputsf(L"  ... (%zu more) ...\n", mftExtents.size() - showCount - 1);
+        dputsf(L"  [last] VCN %llu, %llu cluster(s), LCN %llu\n",
             static_cast<unsigned long long>(last.startVcn),
             static_cast<unsigned long long>(last.clusterCount),
             static_cast<unsigned long long>(last.startLcn));
     }
 
-    printf("\nData-run decode validation %s.\n", sizesMatch ? "PASSED" : "FAILED");
+    dputsf(L"\nData-run decode validation %s.\n", sizesMatch ? L"PASSED" : L"FAILED");
     if (!sizesMatch) {
-        printf("Refusing to proceed to Phase 3 with an unverified extent map.\n");
+        dputsf(L"Refusing to proceed to Phase 3 with an unverified extent map.\n");
         CloseHandle(hVolume);
         return 1;
     }
@@ -1632,20 +1706,17 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
     // --- Phase 3: full-MFT flat pass, then folder-tree build ---
     uint64_t mftFileSize = GetMftFileSize(recordBuf, *header);
     if (mftFileSize == 0) {
-        printf("\nCould not determine $MFT file size from record 0 - skipping Phase 3.\n");
+        dputsf(L"\nCould not determine $MFT file size from record 0 - skipping Phase 3.\n");
         CloseHandle(hVolume);
         return 1;
     }
     uint64_t totalRecordCount = mftFileSize / mftRecordSize;
 
-    bool stdoutIsConsole = StdoutIsConsole(GetStdHandle(STD_OUTPUT_HANDLE));
-    HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-
-    printf("\n-- Phase 3: Step 1 - flat entry list --\n");
-    printf("Total MFT records to scan: %llu\n", static_cast<unsigned long long>(totalRecordCount));
+    dputsf(L"\n-- Phase 3: Step 1 - flat entry list --\n");
+    dputsf(L"Total MFT records to scan: %llu\n", static_cast<unsigned long long>(totalRecordCount));
     std::vector<uint32_t> unresolvedBaseRecordNumbers;
     std::vector<FlatEntry> flatEntries = BuildFlatEntryList(hVolume, mftExtents, clusterSize, mftRecordSize,
-        totalRecordCount, stdoutIsConsole, hStdOut, unresolvedBaseRecordNumbers);
+        totalRecordCount, unresolvedBaseRecordNumbers);
 
     CloseHandle(hVolume); // done with the volume - everything else works from flatEntries in memory
 
@@ -1655,32 +1726,32 @@ int main(int argc, char* argv[]) // NOLINT(bugprone-exception-escape)
             ++decodedTotal;
         }
     }
-    printf("Decoded %llu in-use entries out of %llu records scanned.\n",
+    dputsf(L"Decoded %llu in-use entries out of %llu records scanned.\n",
         static_cast<unsigned long long>(decodedTotal), static_cast<unsigned long long>(totalRecordCount));
 
-    printf("\n-- Phase 3: Step 3 - folder tree build --\n");
-    FolderTree tree = BuildFolderTree(flatEntries, stdoutIsConsole, hStdOut);
+    dputsf(L"\n-- Phase 3: Step 3 - folder tree build --\n");
+    FolderTree tree = BuildFolderTree(flatEntries);
 
-    printf("Folders found:        %zu\n", tree.folderNodes.size());
-    printf("System records:       %zu\n", tree.systemRecordNumbers.size());
-    printf("Orphaned entries:     %zu\n", tree.orphanedRecordNumbers.size());
-    printf("Stale parent references (parent record reused): %zu\n", tree.staleParentRecordNumbers.size());
-    printf("Extension records skipped (not tree nodes): %llu\n",
+    dputsf(L"Folders found:        %zu\n", tree.folderNodes.size());
+    dputsf(L"System records:       %zu\n", tree.systemRecordNumbers.size());
+    dputsf(L"Orphaned entries:     %zu\n", tree.orphanedRecordNumbers.size());
+    dputsf(L"Stale parent references (parent record reused): %zu\n", tree.staleParentRecordNumbers.size());
+    dputsf(L"Extension records skipped (not tree nodes): %llu\n",
         static_cast<unsigned long long>(tree.skippedExtensionRecordCount));
     if (tree.rootFolderSlot != FOLDER_INDEX_SENTINEL) {
         const FolderNode& root = tree.folderNodes[tree.rootFolderSlot];
-        printf("Root: %zu direct subfolders, %zu direct files\n", root.subdirs.size(), root.files.size());
+        dputsf(L"Root: %zu direct subfolders, %zu direct files\n", root.subdirs.size(), root.files.size());
         // Root-children name dump - served its purpose confirming the
         // metadata-file/root-count hypothesis, no longer needed each run.
         // PrintFolderChildren itself is left in place (unused) as
         // reference code for later real lookups - see its own comment.
-        // printf("\n-- Root's direct children --\n");
-        // PrintFolderChildren(root, flatEntries, stdoutIsConsole, hStdOut);
+        // dputsf(L"\n-- Root's direct children --\n");
+        // PrintFolderChildren(root, flatEntries);
     }
     else {
-        printf("Warning: root record (%u) was not found as a folder.\n", ROOT_RECORD_NUMBER);
+        dputsf(L"Warning: root record (%u) was not found as a folder.\n", ROOT_RECORD_NUMBER);
     }
 
-    printf("\nPhase 3 OK: flat entry list and folder tree built.\n");
+    dputsf(L"\nPhase 3 OK: flat entry list and folder tree built.\n");
     return 0;
 }
