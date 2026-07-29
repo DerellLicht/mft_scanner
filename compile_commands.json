@@ -2,7 +2,7 @@
  {
   "directory": "D:\\SourceCode\\Git\\mft_scanner",
   "arguments": [
-   "D:/llvm/bin/i686-w64-mingw32-clang++.exe",
+   "d:/llvm/bin/x86_64-w64-mingw32-clang++.exe",
    "-Wall",
    "-Wextra",
    "-O3",
