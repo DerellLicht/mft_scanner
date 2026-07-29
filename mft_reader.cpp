@@ -1605,8 +1605,9 @@ int wmain(int argc, wchar_t *argv[]) // NOLINT(bugprone-exception-escape)
     //  convert header signature from uint8_t array to wchar_t array
     wchar_t wsig[5];
     //std::copy(&header->signature[0], &header->signature[4], wsig);
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 4; ++i) {
         wsig[i] = static_cast<wchar_t>(header->signature[i]);
+    }    
     wsig[4] = L'\0';
     dputsf(L"Signature:             %s\n", wsig);
     dputsf(L"Sequence number:       %u\n", header->sequenceNumber);
