@@ -1365,7 +1365,7 @@ static void PrintFolderChildren(const FolderNode& folder, const std::vector<Flat
             continue;
         }
         std::wstring line = L"  " + std::to_wstring(entry->fileSize) + L"  " + entry->name +
-            L"  (record " + std::to_wstring(recordNumber) + L")\n";
+                            L"  (record " + std::to_wstring(recordNumber) + L")\n";
         WriteWideLine(line);
     }
 }
