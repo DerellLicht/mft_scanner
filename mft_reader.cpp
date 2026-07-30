@@ -52,6 +52,8 @@
 static bool stdoutIsConsole = true; // default = console
 static HANDLE hStdOut = INVALID_HANDLE_VALUE ;
 
+constexpr int PROGRESS_INTERVAL = 50000;
+
 // ---------------------------------------------------------------------
 // NTFS boot sector (BIOS Parameter Block), exactly 512 bytes on disk.
 // Field layout/offsets are per the documented NTFS on-disk format.
@@ -261,7 +263,6 @@ struct FolderNode
 static const uint32_t FOLDER_INDEX_SENTINEL = 0xFFFFFFFFu; // "not a folder" marker in folderIndexOf
 static const uint32_t ROOT_RECORD_NUMBER = 5;               // NTFS reserves record 5 for the volume root
 static const uint32_t SYSTEM_RECORD_COUNT = 16;              // first ~16 records are reserved ($MFT, $MFTMirr, ...)
-constexpr int PROGRESS_INTERVAL = 50000;
 
 // Result of Step 3 (tree build). Kept together since all four are
 // produced by the same Setup+Pass2 pass and are meaningless apart from
