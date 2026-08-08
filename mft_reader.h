@@ -1,4 +1,7 @@
-
+//****************************************************************************
+//  This file extracts all of the system-level data structs
+//  into a separate header file, so the actual code is more accessible
+//****************************************************************************
 
 // ---------------------------------------------------------------------
 // NTFS boot sector (BIOS Parameter Block), exactly 512 bytes on disk.

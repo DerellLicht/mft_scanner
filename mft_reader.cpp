@@ -33,7 +33,7 @@
 // level for a plain console app. Requiring the user to already be in an
 // elevated prompt keeps everything in one console with no popups.)
 //
-// Build (TDM32, C++11): see accompanying Makefile.
+// Build (TDM32, C++17): see accompanying Makefile.
 
 // TOKEN_ELEVATION / TokenElevation require Vista+; declare that target
 // before windows.h is included so the type is available.
