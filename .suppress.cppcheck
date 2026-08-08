@@ -1,8 +1,8 @@
-constParameterReference:mft_reader.cpp:397
-knownConditionTrueFalse:mft_reader.cpp:592
+constParameterReference:mft_reader.cpp:170
+knownConditionTrueFalse:mft_reader.cpp:365
 knownConditionTrueFalse:mft_reader.cpp:1616
-constParameter:mft_reader.cpp:1464
-unusedFunction:mft_reader.cpp:1520
-unusedStructMember
+constParameter:mft_reader.cpp:1237
+unusedFunction:mft_reader.cpp:1293
 missingIncludeSystem
 useStlAlgorithm
+checkersReport

@@ -1254,8 +1254,8 @@ static char ResolveDriveLetter(int argc, wchar_t* argv[])
 #error Unicode main function requires linking to MSVCRT
 #endif
 
-#include <wchar.h>
-#include <stdlib.h>
+#include <cwchar>
+#include <cstdlib>
 
 extern int _CRT_glob;
 extern 
@@ -1270,10 +1270,10 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]);
 int wmain(int argc, wchar_t *argv[]);
 #endif
 
-int main() 
+int main() // NOLINT(bugprone-exception-escape)
 {
-   wchar_t **enpv, **argv;
-   int argc, si = 0;
+   wchar_t **enpv, **argv; //  NOLINT(cppcoreguidelines-init-variables)
+   int argc, si = 0;       //  NOLINT(cppcoreguidelines-init-variables)
    __wgetmainargs(&argc, &argv, &enpv, _CRT_glob, &si); // this also creates the global variable __wargv
 #ifdef MAIN_USE_ENVP
    return wmain(argc, argv, enpv);
