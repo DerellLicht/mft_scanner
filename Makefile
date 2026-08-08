@@ -39,10 +39,10 @@ ifeq ($(USE_DEBUG),YES)
 CFLAGS := -Wall -Wextra -g -c
 LFLAGS := -g
 else
-CFLAGS := -Wall -Wextra -O3 -c
+CFLAGS := -Wall -Wextra -O3 -std=c++17 -c
 LFLAGS := -s -O3 -mconsole
 endif
-# CFLAGS += -Weffc++
+CFLAGS += -Weffc++
 ifeq ($(USE_64BIT),YES)
 CFLAGS += -DUSE_64BIT
 endif
@@ -92,12 +92,15 @@ dist:
 wc:
 	wc -l $(CPPSRC)
 
-cppc:
-	cmd /C "cppcheck --project=compile_commands.json --enable=all --check-level=exhaustive --suppressions-list=./.suppress.cppcheck"
-
 check:
 	cmd /C "d:\llvm\bin\clang-tidy.exe $(CPPSRC)"
 
+cppc:
+	cmd /C "cppcheck --project=compile_commands.json --enable=all --check-level=exhaustive --suppressions-list=./.suppress.cppcheck"
+
+clint:
+	cmd /C "python ..\ClaudeLint.py --exclude der_libs"
+	
 depend: 
 	makedepend $(IFLAGS) $(CPPSRC)
 
@@ -110,3 +113,5 @@ $(BIN): $(OBJS)
 	$(TOOLS)/$(GNAME) $(OBJS) $(LFLAGS) -o $(BIN) $(LIBS) 
 
 # DO NOT DELETE
+
+mft_reader.o: mft_reader.h

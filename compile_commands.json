@@ -6,8 +6,12 @@
    "-Wall",
    "-Wextra",
    "-O3",
+   "-std=c++17",
    "-c",
    "-Weffc++",
+   "-DUSE_64BIT",
+   "-DUNICODE",
+   "-D_UNICODE",
    "mft_reader.cpp",
    "-o",
    "mft_reader.o"
