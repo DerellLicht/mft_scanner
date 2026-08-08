@@ -90,7 +90,7 @@ dist:
 	zip $(BASE).zip $(BIN) README.md LICENSE.txt
 
 wc:
-	wc -l $(CPPSRC)
+	wc -l $(CPPSRC) $(BASE).rc
 
 check:
 	cmd /C "d:\llvm\bin\clang-tidy.exe $(CPPSRC)"
