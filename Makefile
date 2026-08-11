@@ -7,7 +7,7 @@ USE_CLANG = YES
 # sadly, cygwin mingw does not support gdiplus...
 USE_CYGWIN = NO
 
-include ..\tool_select.mak 
+include .\tool_select.mak
 
 MANIFEST := mft_reader.manifest
 
