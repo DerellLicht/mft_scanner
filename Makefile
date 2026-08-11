@@ -19,10 +19,6 @@ CFLAGS := -Wall -Wextra -O3 -std=c++17 -c
 LFLAGS := -s -O3 -mconsole
 endif
 CFLAGS += -Weffc++
-ifeq ($(USE_64BIT),YES)
-CFLAGS += -DUSE_64BIT
-endif
-
 
 ifeq ($(USE_UNICODE),YES)
 CFLAGS += -DUNICODE -D_UNICODE
@@ -36,11 +32,8 @@ ifeq ($(USE_STATIC),YES)
 LFLAGS += -static
 endif
 
-ifeq ($(USE_64BIT),NO)
 BASE := mft_reader
-else
-BASE := mft_reader
-endif
+
 BIN := $(BASE).exe
 
 CPPSRC:=$(BASE).cpp 
