@@ -4,34 +4,10 @@ USE_DEBUG = NO
 USE_64BIT = YES
 USE_UNICODE = YES
 USE_CLANG = YES
-# use -static for clang/llvm and cygwin/mingw
-USE_STATIC = YES
+# sadly, cygwin mingw does not support gdiplus...
+USE_CYGWIN = NO
 
-#  clang++ vs tdm g++
-#  clang gives *much* clearer compiler error messages...
-#  However, programs built with clang++ will require libc++.dll and libunwind.dll
-#  in order to be used elsewhere unless built with -static, 
-#  which significantly boosts file size
-# llvm:  374784 bytes
-# tdm32: 232960 bytes
-ifeq ($(USE_64BIT),YES)
-#TOOLS:=d:\tdm64\bin
-#GNAME:=g++
-#WRNAME:=windres.exe
-TOOLS:=d:/llvm/bin
-GNAME=x86_64-w64-mingw32-clang++
-WRNAME:=x86_64-w64-mingw32-windres.exe
-else
-ifeq ($(USE_CLANG),YES)
-TOOLS:=d:/llvm/bin
-GNAME:=i686-w64-mingw32-clang++.exe
-WRNAME:=i686-w64-mingw32-windres.exe
-else
-TOOLS:=d:\tdm32\bin
-GNAME:=g++
-WRNAME:=windres.exe
-endif
-endif
+include ..\tool_select.mak 
 
 MANIFEST := mft_reader.manifest
 
